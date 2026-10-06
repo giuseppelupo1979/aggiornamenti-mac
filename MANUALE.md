@@ -34,7 +34,14 @@ Al termine del controllo sono già selezionati tutti gli aggiornamenti sicuri. P
 - **Seleziona tutto** per selezionare o togliere tutto in un colpo;
 - **Aggiorna** (o **Aggiorna tutto**) per partire.
 
-Gli aggiornamenti vengono eseguiti uno alla volta. Ogni riga passa da *In coda* a *In corso* e poi ad *Aggiornata*. Se un'app è aperta, viene chiusa con garbo, aggiornata e riaperta in background. Puoi chiudere la pagina durante gli aggiornamenti: il lavoro continua e ritrovi lo stato quando la riapri.
+Gli aggiornamenti vengono eseguiti uno alla volta. In alto compare una barra generale (per esempio *2 di 5 · 40%*); sotto ogni riga una barra mostra la fase in corso:
+
+- **Download**, con i megabyte scaricati e la percentuale reale quando la dimensione del file è nota (barra animata quando non lo è);
+- **Installazione**;
+- **Sostituzione della versione precedente**;
+- **Rifinitura**, poi la riga diventa *Aggiornata*.
+
+Se l'app era aperta vedrai anche *Chiusura* all'inizio e *Riapertura* alla fine. Se un'app è aperta, viene chiusa con garbo, aggiornata e riaperta in background. Puoi chiudere la pagina durante gli aggiornamenti: il lavoro continua e ritrovi lo stato quando la riapri.
 
 Se una riga finisce in **Non riuscito**, cliccaci sopra per leggere il dettaglio.
 

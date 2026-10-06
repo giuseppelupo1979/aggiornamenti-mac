@@ -84,6 +84,16 @@
   }
   input[type=checkbox]:disabled { opacity: .3; cursor: default; }
 
+  .progress { grid-column: 3 / 5; margin-top: -4px; }
+  .track { height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; position: relative; }
+  .fill { height: 100%; background: var(--fg); border-radius: 3px; transition: width .4s ease; }
+  .track.indeterminate .fill { width: 30% !important; position: absolute; animation: slide 1.4s ease-in-out infinite; }
+  @keyframes slide { from { left: -30%; } to { left: 100%; } }
+  .phase { font-size: 12px; color: var(--muted); margin-top: 6px; display: flex; justify-content: space-between; gap: 12px; }
+  .phase span:last-child { font-variant-numeric: tabular-nums; }
+  .overall { margin: -12px 0 36px; }
+  .overall .phase { margin-top: 8px; }
+
   pre.log {
     margin: 0 4px 14px 74px; padding: 12px 14px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--muted); background: var(--hover); border-radius: 8px; white-space: pre-wrap; word-break: break-word;
@@ -110,6 +120,7 @@
   .dot.on { background: var(--ok); }
 
   @media (max-width: 600px) {
+    .progress { grid-column: 1 / 4; }
     main { padding-top: 40px; }
     header { flex-direction: column; align-items: flex-start; }
     .row { grid-template-columns: 20px 32px 1fr; }
@@ -131,6 +142,7 @@
     </div>
   </header>
 
+  <div id="overall"></div>
   <div id="list"></div>
 
   <footer>
@@ -174,6 +186,58 @@ function ago(t) {
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+function mb(b) { return (b / 1048576).toLocaleString("it-IT", { maximumFractionDigits: b < 10485760 ? 1 : 0 }); }
+
+function bar(pct) {
+  const ind = pct === null || pct === undefined;
+  return `<div class="track${ind ? " indeterminate" : ""}"><div class="fill" style="width:${ind ? 30 : pct > 0 ? Math.max(2, pct) : 0}%"></div></div>`;
+}
+
+function jobText(job) {
+  if (job.status === "queued") return ["In coda", "", 0];
+  let detail = "";
+  if (job.bytes) detail = job.total ? `${mb(job.bytes)} di ${mb(job.total)} MB` : `${mb(job.bytes)} MB`;
+  const known = job.pct !== null && job.pct !== undefined;
+  return [(job.phase || "In corso") + (detail ? " · " + detail : ""), known ? `${Math.round(job.pct)}%` : "", known ? job.pct : null];
+}
+
+function jobProgress(id, job) {
+  const [label, pct, val] = jobText(job);
+  return `<div class="progress" data-p="${esc(id)}">${bar(val)}<div class="phase"><span>${esc(label)}</span><span>${pct}</span></div></div>`;
+}
+
+// aggiorna le barre già presenti senza ricreare il DOM, così le animazioni restano fluide
+function patchProgress() {
+  document.querySelectorAll("[data-p]").forEach(el => {
+    const job = data.jobs[el.dataset.p];
+    if (!job) return;
+    const [label, pct, val] = jobText(job);
+    const track = el.querySelector(".track");
+    const ind = val === null;
+    track.classList.toggle("indeterminate", ind);
+    track.firstElementChild.style.width = (ind ? 30 : val > 0 ? Math.max(2, val) : 0) + "%";
+    const spans = el.querySelectorAll(".phase span");
+    spans[0].textContent = label;
+    spans[1].textContent = pct;
+    const status = el.parentElement.querySelector(".status");
+    if (status) status.innerHTML = job.status === "running" && ind ? '<span class="spin"></span>' : "";
+  });
+}
+
+let lastSig = "";
+
+function renderOverall() {
+  const b = data.batch;
+  if (!data.running || !b || !b.total) { $("#overall").innerHTML = ""; return; }
+  const cur = Object.values(data.jobs).find(j => j.status === "running");
+  const pct = 100 * (b.done + (cur && cur.pct ? cur.pct / 100 : 0)) / b.total;
+  if (!$("#overall .overall")) $("#overall").innerHTML = `<div class="overall">${bar(0)}<div class="phase"><span></span><span></span></div></div>`;
+  $("#overall .fill").style.width = Math.max(2, pct) + "%";
+  const spans = $("#overall").querySelectorAll(".phase span");
+  spans[0].textContent = `${Math.min(b.done + 1, b.total)} di ${b.total}`;
+  spans[1].textContent = `${Math.round(pct)}%`;
+}
+
 function pending() { return data.items.filter(i => !i.updated); }
 
 function render() {
@@ -189,11 +253,12 @@ function render() {
 
   $("#sub").innerHTML = data.scanning
     ? '<span class="spin"></span>Controllo in corso…'
-    : data.running ? '<span class="spin"></span>Aggiornamento in corso…'
+    : data.running ? "Aggiornamento in corso…"
     : data.scan_error ? "Errore: " + esc(data.scan_error)
     : todo.length === 0 ? `Tutto aggiornato · ${ago(data.scanned_at)}`
     : `${todo.length} ${todo.length === 1 ? "aggiornamento disponibile" : "aggiornamenti disponibili"} · ${ago(data.scanned_at)}`;
 
+  renderOverall();
   $("#scan").disabled = busy;
   const n = selected.size;
   $("#go").disabled = busy || n === 0;
@@ -207,6 +272,13 @@ function render() {
       '<div class="empty"><strong>Tutto aggiornato</strong>Nessuna app ha bisogno di aggiornamenti.</div>';
     return;
   }
+
+  const sig = JSON.stringify([busy, n, [...selected], [...openLogs], items.map(i => {
+    const j = data.jobs[i.id];
+    return [i.id, i.updated, j?.status, openLogs.has(i.id) ? j?.log : ""];
+  })]);
+  if (sig === lastSig) return patchProgress();
+  lastSig = sig;
 
   const groups = [
     ["Applicazioni", items.filter(i => i.kind !== "formula")],
@@ -222,8 +294,8 @@ function render() {
       const st = i.updated ? "done" : job?.status;
       const status =
         st === "done" ? "Aggiornata" :
-        st === "running" ? '<span class="spin"></span>In corso' :
-        st === "queued" ? "In coda" :
+        st === "running" ? (job.pct !== null && job.pct !== undefined ? "" : '<span class="spin"></span>') :
+        st === "queued" ? "" :
         st === "error" ? "Non riuscito" : "";
       const icon = i.path
         ? `<img class="icon" src="/api/icon?path=${encodeURIComponent(i.path)}" alt="" onerror="this.className='icon blank';this.removeAttribute('src')">`
@@ -237,6 +309,7 @@ function render() {
             <div class="meta">${esc(i.installed)}<span class="arrow">→</span>${esc(i.latest)} · ${esc(i.source)}</div>
           </div>
           <div class="status ${st || ""}">${status}</div>
+          ${st === "running" || st === "queued" ? jobProgress(i.id, job) : ""}
         </div>
         ${openLogs.has(i.id) && job?.log ? `<pre class="log">${esc(job.log)}</pre>` : ""}
       </li>`;
@@ -289,7 +362,7 @@ $("#pwdel").onclick = async () => {
 
 async function poll() {
   try { data = await api("/api/state"); render(); } catch {}
-  setTimeout(poll, data.scanning || data.running ? 1000 : 5000);
+  setTimeout(poll, data.running ? 500 : data.scanning ? 1000 : 5000);
 }
 poll();
 </script>

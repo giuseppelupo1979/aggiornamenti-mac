@@ -40,6 +40,7 @@ os.makedirs(CACHE, exist_ok=True)
 
 BREW = shutil.which("brew") or "/opt/homebrew/bin/brew"
 MAS = shutil.which("mas") or "/opt/homebrew/bin/mas"
+BREW_CACHE = os.environ.get("HOMEBREW_CACHE") or os.path.expanduser("~/Library/Caches/Homebrew")
 
 ENV = dict(os.environ)
 ENV.update({
@@ -60,6 +61,7 @@ state = {
     "items": [],          # elenco aggiornamenti disponibili
     "jobs": {},           # id -> {status, log}
     "running": False,
+    "batch": None,        # {total, done} del giro di aggiornamenti in corso
 }
 
 
@@ -68,6 +70,123 @@ state = {
 def run(cmd, timeout=1800, env=None):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env or ENV)
     return p.returncode, re.sub(r"\x1b\[[0-9;]*m", "", (p.stdout or "") + (p.stderr or ""))
+
+
+def run_stream(cmd, on_line, timeout=3600):
+    """Come run(), ma passa ogni riga di output a on_line mentre il comando gira."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, env=ENV)
+    timer = threading.Timer(timeout, p.kill)
+    timer.start()
+    out, buf = [], b""
+    try:
+        while True:
+            chunk = p.stdout.read1(4096)
+            if not chunk:
+                break
+            buf += chunk
+            *parts, buf = re.split(rb"[\r\n]", buf)
+            for part in parts:
+                line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", part.decode("utf-8", "replace")).rstrip()
+                if line.strip():
+                    out.append(line)
+                    on_line(line)
+        if buf.strip():
+            out.append(buf.decode("utf-8", "replace"))
+        return p.wait(), "\n".join(out)
+    finally:
+        timer.cancel()
+
+
+def set_progress(jid, **kw):
+    with lock:
+        job = state["jobs"].get(jid)
+        if job is not None:
+            job.update(kw)
+
+
+def remote_size(url):
+    try:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "AggiornamentiMac"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return int(r.headers.get("Content-Length") or 0) or None
+    except Exception:
+        return None
+
+
+# fasi riconosciute nell'output di brew e mas: (espressione, fase, percentuale minima)
+PHASES = [
+    (r"==> (Fetching|Downloading)|Bottle Manifest|Downloading ", "Download", 3),
+    (r"==> (Installing|Pouring|Upgrading)|Moving App|Moving Generic|Running installer|Installing ", "Installazione", 75),
+    (r"Removing App|Backing App|Uninstalling|overwriting|Purging", "Sostituzione della versione precedente", 85),
+    (r"==> (Linking|Caveats|Summary)|successfully|Upgraded|Installed ", "Rifinitura", 95),
+]
+
+
+def bottle_size(downloads, incomplete):
+    """Dimensione di una bottle in download, letta dal manifest che brew scarica prima."""
+    m = re.search(r"--(.+?)--(.+)\.bottle\.tar\.gz\.incomplete$", os.path.basename(incomplete))
+    if not m:
+        return None
+    name, ref = m.groups()
+    manifests = sorted(glob.glob(os.path.join(downloads, f"*--{glob.escape(name)}-*.bottle_manifest.json")),
+                       key=os.path.getmtime, reverse=True)
+    for path in manifests[:1]:
+        try:
+            with open(path) as f:
+                for entry in json.load(f).get("manifests", []):
+                    ann = entry.get("annotations", {})
+                    if ann.get("org.opencontainers.image.ref.name") == ref:
+                        return int(ann.get("sh.brew.bottle.size") or 0) or None
+        except Exception:
+            pass
+    return None
+
+
+def brew_progress(jid, total=None):
+    """Segue le righe di brew e il file in download nella cache di Homebrew."""
+    start = time.time()
+    stop = threading.Event()
+    cur = {"phase": "Preparazione", "floor": 1}
+    downloads = os.path.join(BREW_CACHE, "downloads")
+
+    def watch():
+        while not stop.wait(0.5):
+            if cur["phase"] != "Download":
+                continue
+            newest = None
+            for f in glob.glob(os.path.join(downloads, "*.incomplete")):
+                try:
+                    st = os.stat(f)
+                except OSError:
+                    continue
+                if st.st_mtime >= start - 1 and (newest is None or st.st_mtime > newest[0]):
+                    newest = (st.st_mtime, st.st_size, f)
+            if not newest:
+                continue
+            got = newest[1]
+            size = total or bottle_size(downloads, newest[2])
+            if size and got <= size:
+                set_progress(jid, bytes=got, total=size, pct=round(3 + 67 * got / size, 1))
+            elif total and got <= total:
+                set_progress(jid, bytes=got, total=total, pct=round(3 + 67 * got / total, 1))
+            else:
+                set_progress(jid, bytes=got, total=None, pct=None)
+
+    def on_line(line):
+        m = re.search(r"(\d{1,3}(?:\.\d+)?)\s?%", line)
+        for rx, phase, floor in PHASES:
+            if re.search(rx, line):
+                if floor >= cur["floor"]:
+                    cur.update(phase=phase, floor=floor)
+                    set_progress(jid, phase=phase, pct=floor if phase != "Download" else None,
+                                 bytes=None, total=None)
+                break
+        if m and cur["phase"] == "Download" and float(m.group(1)) <= 100:
+            set_progress(jid, pct=round(3 + 0.67 * float(m.group(1)), 1))
+
+    threading.Thread(target=watch, daemon=True).start()
+    return on_line, stop
 
 
 def vparts(v):
@@ -275,6 +394,15 @@ def attach_paths(items):
     return items
 
 
+_by_token = {}
+
+
+def cask_by_token(token):
+    if not _by_token:
+        _by_token.update(cask_catalog_by_token())
+    return _by_token.get(token) or {}
+
+
 def cask_catalog_by_token():
     path = os.path.join(CACHE, "cask.json")
     try:
@@ -285,6 +413,7 @@ def cask_catalog_by_token():
 
 
 def do_scan():
+    _by_token.clear()
     try:
         run([BREW, "update", "--quiet"], timeout=300, env={**ENV, "HOMEBREW_NO_AUTO_UPDATE": ""})
         with cf.ThreadPoolExecutor(2) as ex:
@@ -333,7 +462,7 @@ def team_id(app):
 
 
 def install_sparkle(item, log):
-    url, dest = item["url"], item["path"]
+    url, dest, jid = item["url"], item["path"], item["id"]
     old_team = team_id(dest)
     work = tempfile.mkdtemp(prefix="agg-", dir=CACHE)
     try:
@@ -342,10 +471,20 @@ def install_sparkle(item, log):
         log(f"Scarico {url}")
         req = urllib.request.Request(url, headers={"User-Agent": "AggiornamentiMac"})
         with urllib.request.urlopen(req, timeout=600) as r, open(archive, "wb") as f:
-            shutil.copyfileobj(r, f)
+            total = int(r.headers.get("Content-Length") or 0) or None
+            got, last = 0, 0
+            set_progress(jid, phase="Download", pct=None if not total else 3, bytes=0, total=total)
+            while chunk := r.read(256 * 1024):
+                f.write(chunk)
+                got += len(chunk)
+                if time.time() - last > 0.3:
+                    last = time.time()
+                    set_progress(jid, bytes=got, pct=round(3 + 67 * got / total, 1) if total else None)
+        set_progress(jid, phase="Apertura del pacchetto", pct=72, bytes=None, total=None)
         lower = fname.lower()
         new_app, mount = None, None
         if lower.endswith((".pkg", ".mpkg")):
+            set_progress(jid, phase="Installazione", pct=80)
             rc, out = run(["sudo", "-A", "installer", "-pkg", archive, "-target", "/"])
             log(out)
             return rc == 0
@@ -375,6 +514,7 @@ def install_sparkle(item, log):
             if not new_app:
                 log("Nessuna app trovata nell'archivio")
                 return False
+            set_progress(jid, phase="Verifica della firma", pct=78)
             new_team = team_id(new_app)
             if old_team and new_team != old_team:
                 log(f"Firma diversa ({new_team} invece di {old_team}): annullato per sicurezza")
@@ -383,6 +523,7 @@ def install_sparkle(item, log):
             if rc != 0:
                 log("Firma non valida: " + out)
                 return False
+            set_progress(jid, phase="Installazione", pct=88)
             staged = os.path.join(work, "staged.app")
             run(["ditto", new_app, staged])
             backup = os.path.join(work, "old.app")
@@ -406,8 +547,8 @@ def update_one(item):
     lines = []
 
     def log(text):
-        text = text.strip()
-        if text:
+        text = text.rstrip()
+        if text.strip():
             lines.append(text)
             with lock:
                 state["jobs"][jid]["log"] = "\n".join(lines)[-6000:]
@@ -415,26 +556,36 @@ def update_one(item):
     bid = item.get("bundle_id")
     was_running = item["kind"] in ("cask", "adopt", "sparkle") and running_app(bid)
     if was_running:
+        set_progress(jid, phase=f"Chiusura di {item['name']}", pct=1)
         log(f"Chiudo {item['name']}")
         quit_app(bid)
 
     kind, token = item["kind"], item["token"]
+    cmds = {
+        "cask": [BREW, "upgrade", "--cask", "--greedy", token],
+        "formula": [BREW, "upgrade", "--formula", token],
+        "adopt": [BREW, "install", "--cask", "--force", token],
+        "mas": ["sudo", "-A", MAS, "update", token],
+    }
     ok = False
     try:
-        if kind == "cask":
-            rc, out = run([BREW, "upgrade", "--cask", "--greedy", token]); log(out); ok = rc == 0
-        elif kind == "formula":
-            rc, out = run([BREW, "upgrade", "--formula", token]); log(out); ok = rc == 0
-        elif kind == "adopt":
-            rc, out = run([BREW, "install", "--cask", "--force", token]); log(out); ok = rc == 0
-        elif kind == "mas":
-            rc, out = run(["sudo", "-A", MAS, "update", token]); log(out); ok = rc == 0
-        elif kind == "sparkle":
+        if kind == "sparkle":
             ok = install_sparkle(item, log)
+        else:
+            total = None
+            if kind in ("cask", "adopt"):
+                total = remote_size(cask_by_token(token).get("url") or "")
+            on_line, stop = brew_progress(jid, total)
+            try:
+                rc, _ = run_stream(cmds[kind], lambda l: (log(l), on_line(l)))
+            finally:
+                stop.set()
+            ok = rc == 0
     except Exception as e:
         log(str(e))
 
     if was_running and bid:
+        set_progress(jid, phase=f"Riapertura di {item['name']}", pct=98)
         run(["open", "-g", "-b", bid], timeout=30)
 
     if not ok and "sudo" in "\n".join(lines).lower() and not has_password():
@@ -449,11 +600,15 @@ def do_updates(ids):
     with lock:
         todo = [i for i in state["items"] if i["id"] in ids and not i.get("updated")]
         for i in todo:
-            state["jobs"][i["id"]] = {"status": "queued", "log": ""}
+            state["jobs"][i["id"]] = {"status": "queued", "log": "", "phase": None,
+                                      "pct": None, "bytes": None, "total": None}
+        state["batch"] = {"total": len(todo), "done": 0}
     for item in todo:
         with lock:
-            state["jobs"][item["id"]]["status"] = "running"
+            state["jobs"][item["id"]].update(status="running", phase="Preparazione", pct=0)
         update_one(item)
+        with lock:
+            state["batch"]["done"] += 1
     with lock:
         state["running"] = False
 
@@ -506,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
             return {
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
                 "scan_error": state["scan_error"], "items": state["items"],
-                "jobs": state["jobs"], "running": state["running"],
+                "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
                 "password": has_password(),
             }
 
