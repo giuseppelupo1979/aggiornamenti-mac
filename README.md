@@ -45,7 +45,7 @@ Le app aperte vengono chiuse, aggiornate e riaperte in background.
    ~/aggiornamenti-mac/installa.sh
    ```
 
-4. Apri la pagina con un doppio clic su `Aggiornamenti.command`, oppure vai su [http://127.0.0.1:8765](http://127.0.0.1:8765).
+4. Apri l'app **Aggiornamenti** che lo script ha messo sulla Scrivania (oppure `Aggiornamenti.command`): avvia il server se serve e apre [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
 5. Facoltativo, ma serve per gli aggiornamenti davvero silenziosi dell'App Store e dei pacchetti `.pkg`: in fondo alla pagina inserisci la password di amministratore. Viene verificata e salvata nel Portachiavi di macOS.
 
@@ -64,7 +64,7 @@ Le app aperte vengono chiuse, aggiornate e riaperte in background.
 | `index.html` | interfaccia |
 | `askpass.sh` | fornisce a `sudo` la password dal Portachiavi |
 | `Aggiornamenti.command` | avvio con doppio clic |
-| `installa.sh` | preparazione dell'ambiente e avvio automatico |
+| `installa.sh` | preparazione dell'ambiente, app sulla Scrivania, avvio automatico |
 | `MANUALE.md` | manuale d'uso |
 
 ## Disinstallazione
@@ -76,7 +76,7 @@ security delete-generic-password -s aggiornamenti-mac 2>/dev/null
 rm -rf ~/Library/Caches/AggiornamentiMac
 ```
 
-poi cancella la cartella del progetto.
+poi cancella la cartella del progetto e l'app `Aggiornamenti` dalla Scrivania.
 
 ## Limiti
 

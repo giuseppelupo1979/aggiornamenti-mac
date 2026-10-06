@@ -40,4 +40,22 @@ PL
   echo "Avvio automatico attivo. Pagina: http://127.0.0.1:8765"
 fi
 
-echo "Pronto. Doppio clic su Aggiornamenti.command per aprire la pagina."
+read -r -p "Creare l'app Aggiornamenti sulla Scrivania? [S/n] " ans
+if [[ ! "$ans" =~ ^[nN] ]]; then
+  APP="$HOME/Desktop/Aggiornamenti.app"
+  SCRIPT="$(mktemp -t agg).applescript"
+  printf 'do shell script quoted form of "%s" & " > /dev/null 2>&1"\n' "$DIR/Aggiornamenti.command" > "$SCRIPT"
+  rm -rf "$APP"
+  osacompile -o "$APP" "$SCRIPT"
+  ICON=/System/Library/PrivateFrameworks/SoftwareUpdate.framework/Versions/A/Resources/SoftwareUpdate.icns
+  if [ -f "$ICON" ]; then
+    cp "$ICON" "$APP/Contents/Resources/applet.icns"
+    rm -f "$APP/Contents/Resources/Assets.car"
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$APP/Contents/Info.plist" 2>/dev/null || true
+  fi
+  codesign --force --deep -s - "$APP" >/dev/null 2>&1
+  touch "$APP"
+  echo "App creata sulla Scrivania."
+fi
+
+echo "Pronto. Apri Aggiornamenti dalla Scrivania (o Aggiornamenti.command)."

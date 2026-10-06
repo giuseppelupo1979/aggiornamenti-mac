@@ -4,7 +4,7 @@ Aggiornamenti è una piccola pagina web che gira solo sul tuo Mac. Controlla tut
 
 ## Aprire il programma
 
-Fai doppio clic su **Aggiornamenti.command** nella cartella del progetto. Si apre il browser all'indirizzo `http://127.0.0.1:8765` e parte subito un controllo. La prima volta macOS potrebbe chiederti conferma per aprire un file scaricato: clic destro sul file, poi **Apri**.
+Fai doppio clic sull'app **Aggiornamenti** sulla Scrivania (oppure su **Aggiornamenti.command** nella cartella del progetto). Si apre il browser all'indirizzo `http://127.0.0.1:8765` e parte subito un controllo. La prima volta macOS potrebbe chiederti conferma per aprire un file scaricato: clic destro sul file, poi **Apri**.
 
 Se il programma è già attivo, il doppio clic apre solo la pagina. Puoi anche tenerla tra i preferiti del browser.
 
