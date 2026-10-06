@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aggiornamenti</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --fg: #1d1d1f;
+    --muted: #86868b;
+    --line: #e8e8e6;
+    --accent: #1d1d1f;
+    --accent-fg: #fbfbfa;
+    --ok: #2f7d4f;
+    --err: #b3261e;
+    --hover: #f3f3f1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161617;
+      --fg: #f5f5f7;
+      --muted: #8e8e93;
+      --line: #2a2a2c;
+      --accent: #f5f5f7;
+      --accent-fg: #161617;
+      --ok: #5fbf85;
+      --err: #ff6b5e;
+      --hover: #1e1e20;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 72px 16px 96px; }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 40px; }
+  h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .actions { display: flex; gap: 10px; flex-shrink: 0; }
+
+  button {
+    font: inherit; font-size: 14px; border-radius: 999px; padding: 8px 18px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--fg);
+    transition: opacity .15s, background .15s;
+  }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.primary:hover:not(:disabled) { background: var(--accent); opacity: .85; }
+  button:disabled { opacity: .35; cursor: default; }
+
+  .bar { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .bar label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+
+  h2 { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 36px 4px 4px; }
+
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { border-bottom: 1px solid var(--line); }
+  .row { display: grid; grid-template-columns: 20px 36px 1fr auto; align-items: center; gap: 14px; padding: 14px 4px; cursor: pointer; }
+  .row:hover { background: var(--hover); }
+  .icon { width: 36px; height: 36px; border-radius: 8px; object-fit: contain; }
+  .icon.blank { background: var(--line); border-radius: 9px; }
+  .icon.term { display: grid; place-items: center; font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; }
+  .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta .arrow { margin: 0 4px; }
+  .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; margin-left: 8px; vertical-align: 1px; font-weight: 400; }
+  .status { font-size: 13px; color: var(--muted); text-align: right; min-width: 80px; }
+  .status.done { color: var(--ok); }
+  .status.error { color: var(--err); cursor: pointer; }
+  li.done .name, li.done .meta { opacity: .5; }
+
+  input[type=checkbox] {
+    appearance: none; width: 18px; height: 18px; margin: 0; border: 1.5px solid var(--muted);
+    border-radius: 50%; cursor: pointer; display: grid; place-items: center; transition: all .15s;
+  }
+  input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
+  input[type=checkbox]:checked::after {
+    content: ""; width: 5px; height: 9px; border: solid var(--accent-fg); border-width: 0 1.5px 1.5px 0;
+    transform: translateY(-1px) rotate(45deg);
+  }
+  input[type=checkbox]:disabled { opacity: .3; cursor: default; }
+
+  pre.log {
+    margin: 0 4px 14px 74px; padding: 12px 14px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted); background: var(--hover); border-radius: 8px; white-space: pre-wrap; word-break: break-word;
+    max-height: 220px; overflow: auto;
+  }
+
+  .spin { display: inline-block; width: 12px; height: 12px; border: 1.5px solid var(--line); border-top-color: var(--fg); border-radius: 50%; animation: s .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+
+  .empty { text-align: center; color: var(--muted); padding: 96px 0; }
+  .empty strong { display: block; color: var(--fg); font-size: 17px; font-weight: 500; margin-bottom: 6px; }
+
+  footer { margin-top: 56px; color: var(--muted); font-size: 13px; }
+  footer details summary { cursor: pointer; list-style: none; }
+  footer details summary::-webkit-details-marker { display: none; }
+  footer form { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+  footer input[type=password] {
+    font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line);
+    background: transparent; color: var(--fg); width: 240px; outline: none;
+  }
+  footer input[type=password]:focus { border-color: var(--muted); }
+  footer p { margin: 10px 0 0; max-width: 560px; }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; background: var(--muted); }
+  .dot.on { background: var(--ok); }
+
+  @media (max-width: 600px) {
+    main { padding-top: 40px; }
+    header { flex-direction: column; align-items: flex-start; }
+    .row { grid-template-columns: 20px 32px 1fr; }
+    .status { grid-column: 3; text-align: left; min-width: 0; }
+    pre.log { margin-left: 4px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Aggiornamenti</h1>
+      <p class="sub" id="sub">Controllo in corso…</p>
+    </div>
+    <div class="actions">
+      <button id="scan">Controlla</button>
+      <button id="go" class="primary" disabled>Aggiorna</button>
+    </div>
+  </header>
+
+  <div id="list"></div>
+
+  <footer>
+    <details>
+      <summary><span class="dot" id="pwdot"></span><span id="pwlabel">Password di amministratore</span></summary>
+      <form id="pwform" autocomplete="off">
+        <input type="password" id="pw" placeholder="Password del Mac">
+        <button type="submit">Salva</button>
+        <button type="button" id="pwdel">Rimuovi</button>
+      </form>
+      <p>Alcuni aggiornamenti (App Store e programmi con installer) richiedono i privilegi di amministratore.
+      La password viene salvata solo nel Portachiavi di questo Mac e serve a completarli senza chiedere nulla.</p>
+      <p id="pwmsg"></p>
+    </details>
+  </footer>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let data = { items: [], jobs: {} };
+const selected = new Set();
+const openLogs = new Set();
+let firstLoad = true;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function ago(t) {
+  if (!t) return "";
+  const s = Math.round(Date.now() / 1000 - t);
+  if (s < 60) return "adesso";
+  if (s < 3600) return `${Math.floor(s / 60)} min fa`;
+  return new Date(t * 1000).toLocaleString("it-IT", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function pending() { return data.items.filter(i => !i.updated); }
+
+function render() {
+  const busy = data.scanning || data.running;
+  const items = data.items;
+  const todo = pending();
+
+  if (firstLoad && !data.scanning) {
+    todo.forEach(i => { if (!i.major && i.verified !== false) selected.add(i.id); });
+    firstLoad = false;
+  }
+  for (const id of [...selected]) if (!todo.find(i => i.id === id)) selected.delete(id);
+
+  $("#sub").innerHTML = data.scanning
+    ? '<span class="spin"></span>Controllo in corso…'
+    : data.running ? '<span class="spin"></span>Aggiornamento in corso…'
+    : data.scan_error ? "Errore: " + esc(data.scan_error)
+    : todo.length === 0 ? `Tutto aggiornato · ${ago(data.scanned_at)}`
+    : `${todo.length} ${todo.length === 1 ? "aggiornamento disponibile" : "aggiornamenti disponibili"} · ${ago(data.scanned_at)}`;
+
+  $("#scan").disabled = busy;
+  const n = selected.size;
+  $("#go").disabled = busy || n === 0;
+  $("#go").textContent = n && n === todo.length ? "Aggiorna tutto" : n ? `Aggiorna (${n})` : "Aggiorna";
+
+  $("#pwdot").className = "dot" + (data.password ? " on" : "");
+  $("#pwlabel").textContent = data.password ? "Password di amministratore salvata" : "Password di amministratore non impostata";
+
+  if (!items.length) {
+    $("#list").innerHTML = data.scanning ? "" :
+      '<div class="empty"><strong>Tutto aggiornato</strong>Nessuna app ha bisogno di aggiornamenti.</div>';
+    return;
+  }
+
+  const groups = [
+    ["Applicazioni", items.filter(i => i.kind !== "formula")],
+    ["Strumenti da riga di comando", items.filter(i => i.kind === "formula")],
+  ].filter(g => g.length && g[1].length);
+
+  let html = `<div class="bar"><label><input type="checkbox" id="all" ${todo.length && n === todo.length ? "checked" : ""} ${busy || !todo.length ? "disabled" : ""}> Seleziona tutto</label><span>${n} di ${todo.length}</span></div>`;
+
+  for (const [title, list] of groups) {
+    html += `<h2>${title}</h2><ul>`;
+    for (const i of list) {
+      const job = data.jobs[i.id];
+      const st = i.updated ? "done" : job?.status;
+      const status =
+        st === "done" ? "Aggiornata" :
+        st === "running" ? '<span class="spin"></span>In corso' :
+        st === "queued" ? "In coda" :
+        st === "error" ? "Non riuscito" : "";
+      const icon = i.path
+        ? `<img class="icon" src="/api/icon?path=${encodeURIComponent(i.path)}" alt="" onerror="this.className='icon blank';this.removeAttribute('src')">`
+        : i.kind === "formula" ? '<div class="icon term">&gt;_</div>' : '<div class="icon blank"></div>';
+      html += `<li class="${st === "done" ? "done" : ""}">
+        <div class="row" data-id="${esc(i.id)}">
+          <input type="checkbox" ${selected.has(i.id) ? "checked" : ""} ${busy || i.updated ? "disabled" : ""}>
+          ${icon}
+          <div style="min-width:0">
+            <div class="name">${esc(i.name)}${i.major ? '<span class="tag">versione maggiore</span>' : ""}${i.verified === false ? '<span class="tag">da verificare</span>' : ""}</div>
+            <div class="meta">${esc(i.installed)}<span class="arrow">→</span>${esc(i.latest)} · ${esc(i.source)}</div>
+          </div>
+          <div class="status ${st || ""}">${status}</div>
+        </div>
+        ${openLogs.has(i.id) && job?.log ? `<pre class="log">${esc(job.log)}</pre>` : ""}
+      </li>`;
+    }
+    html += "</ul>";
+  }
+  $("#list").innerHTML = html;
+}
+
+$("#list").addEventListener("click", e => {
+  if (e.target.id === "all") {
+    if (e.target.checked) pending().forEach(i => selected.add(i.id)); else selected.clear();
+    return render();
+  }
+  const row = e.target.closest(".row");
+  if (!row) return;
+  const id = row.dataset.id;
+  const job = data.jobs[id];
+  if (job && (job.status === "error" || e.target.closest(".status"))) {
+    openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
+    return render();
+  }
+  const cb = row.querySelector("input");
+  if (cb.disabled) return;
+  selected.has(id) ? selected.delete(id) : selected.add(id);
+  render();
+});
+
+$("#scan").onclick = async () => { firstLoad = true; data = await api("/api/scan", {}); render(); };
+$("#go").onclick = async () => {
+  try { data = await api("/api/update", { ids: [...selected] }); } catch (e) { alert(e.message); }
+  render();
+};
+
+$("#pwform").onsubmit = async e => {
+  e.preventDefault();
+  const pw = $("#pw").value;
+  if (!pw) return;
+  $("#pwmsg").textContent = "Verifica…";
+  try { data = await api("/api/password", { password: pw }); $("#pwmsg").textContent = "Salvata nel Portachiavi."; }
+  catch (err) { $("#pwmsg").textContent = err.message; }
+  $("#pw").value = "";
+  render();
+};
+$("#pwdel").onclick = async () => {
+  data = await api("/api/password", { password: "" });
+  $("#pwmsg").textContent = "Rimossa.";
+  render();
+};
+
+async function poll() {
+  try { data = await api("/api/state"); render(); } catch {}
+  setTimeout(poll, data.scanning || data.running ? 1000 : 5000);
+}
+poll();
+</script>
+</body>
+</html>
