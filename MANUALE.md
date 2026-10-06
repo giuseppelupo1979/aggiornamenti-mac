@@ -47,6 +47,14 @@ Se una riga finisce in **Non riuscito**, cliccaci sopra per leggere il dettaglio
 
 **Controlla** ripete la ricerca da capo.
 
+## Escludere un'app
+
+Passando con il mouse su una riga compare a destra **Escludi**. L'app sparisce dall'elenco principale: non viene più contata, non viene selezionata in automatico e non rientra in **Aggiorna tutto**. Utile per le app che vuoi tenere a una versione precisa, quelle con licenza legata alla versione o i falsi aggiornamenti.
+
+Le app escluse finiscono in fondo alla pagina, nella sezione chiusa **Escluse**. Il titolo dice quante sono e quante hanno un aggiornamento disponibile. Aprila solo quando ti serve: da lì puoi selezionare un'app esclusa e aggiornarla lo stesso con il pulsante **Aggiorna**, oppure riportarla nell'elenco principale con **Includi**.
+
+L'elenco delle esclusioni è salvato in `~/Library/Application Support/AggiornamentiMac/esclusi.json` e resta valido anche dopo il riavvio del Mac.
+
 ## La password di amministratore
 
 Alcuni aggiornamenti richiedono i privilegi di amministratore: tutti quelli del Mac App Store e le app che si installano con un pacchetto `.pkg`. Per farli in silenzio il programma ha bisogno della password del Mac.

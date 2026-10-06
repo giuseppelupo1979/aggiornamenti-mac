@@ -36,7 +36,11 @@ ASKPASS = os.path.join(ROOT, "askpass.sh")
 SPARKLE_NS = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
 APP_DIRS = ["/Applications", "/Applications/Utilities", os.path.expanduser("~/Applications")]
 
+SUPPORT = os.path.expanduser("~/Library/Application Support/AggiornamentiMac")
+EXCLUDED_FILE = os.path.join(SUPPORT, "esclusi.json")
+
 os.makedirs(CACHE, exist_ok=True)
+os.makedirs(SUPPORT, exist_ok=True)
 
 BREW = shutil.which("brew") or "/opt/homebrew/bin/brew"
 MAS = shutil.which("mas") or "/opt/homebrew/bin/mas"
@@ -63,6 +67,30 @@ state = {
     "running": False,
     "batch": None,        # {total, done} del giro di aggiornamenti in corso
 }
+
+
+# ---------------------------------------------------------------- esclusioni
+
+def item_key(item):
+    """Chiave stabile: un'app installata a mano e poi adottata da brew resta la stessa."""
+    if item["kind"] in ("cask", "adopt"):
+        return "cask:" + item["token"]
+    return item["id"]
+
+
+def load_excluded():
+    try:
+        with open(EXCLUDED_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_excluded(data):
+    tmp = EXCLUDED_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, EXCLUDED_FILE)
 
 
 # ---------------------------------------------------------------- utilità
@@ -423,6 +451,8 @@ def do_scan():
             mas_items = f_mas.result()
         items = brew_items + mas_items + scan_apps(managed)
         items = attach_paths(items)
+        for it in items:
+            it["key"] = item_key(it)
         order = {"cask": 0, "adopt": 0, "sparkle": 0, "mas": 0, "formula": 1}
         items.sort(key=lambda i: (order[i["kind"]], i["name"].lower()))
         with lock:
@@ -663,6 +693,7 @@ class Handler(BaseHTTPRequestHandler):
                 "scan_error": state["scan_error"], "items": state["items"],
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
                 "password": has_password(),
+                "excluded": load_excluded(),
             }
 
     def do_GET(self):
@@ -705,6 +736,23 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(409, {"error": "busy"})
                 state["running"] = True
             threading.Thread(target=do_updates, args=(ids,), daemon=True).start()
+            return self.send(200, self.snapshot())
+        if u.path == "/api/exclude":
+            key = str(body.get("key") or "")
+            if not key:
+                return self.send(400, {"error": "chiave mancante"})
+            with lock:
+                excluded = load_excluded()
+                if body.get("exclude"):
+                    excluded[key] = {
+                        "name": str(body.get("name") or key),
+                        "path": body.get("path") or None,
+                        "kind": body.get("kind") or None,
+                        "since": time.time(),
+                    }
+                else:
+                    excluded.pop(key, None)
+                save_excluded(excluded)
             return self.send(200, self.snapshot())
         if u.path == "/api/password":
             pw = body.get("password") or ""

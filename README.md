@@ -16,7 +16,7 @@ Il manuale d'uso completo è in [MANUALE.md](MANUALE.md).
 | App con Sparkle non presenti nel catalogo | feed di aggiornamento dello sviluppatore | download, verifica della firma, sostituzione |
 | Strumenti da riga di comando | `brew outdated` | `brew upgrade --formula` |
 
-Le app aperte vengono chiuse, aggiornate e riaperte in background.
+Le app aperte vengono chiuse, aggiornate e riaperte in background. Ogni pacchetto mostra una barra di avanzamento con la fase in corso, e le app che non vuoi toccare si possono escludere: finiscono in una sezione separata da cui puoi comunque aggiornarle a mano.
 
 ## Requisiti
 
@@ -73,7 +73,7 @@ Le app aperte vengono chiuse, aggiornate e riaperte in background.
 launchctl bootout gui/$(id -u)/com.aggiornamenti-mac 2>/dev/null
 rm -f ~/Library/LaunchAgents/com.aggiornamenti-mac.plist
 security delete-generic-password -s aggiornamenti-mac 2>/dev/null
-rm -rf ~/Library/Caches/AggiornamentiMac
+rm -rf ~/Library/Caches/AggiornamentiMac "$HOME/Library/Application Support/AggiornamentiMac"
 ```
 
 poi cancella la cartella del progetto e l'app `Aggiornamenti` dalla Scrivania.

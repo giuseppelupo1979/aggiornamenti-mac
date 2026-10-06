@@ -94,6 +94,23 @@
   .overall { margin: -12px 0 36px; }
   .overall .phase { margin-top: 8px; }
 
+  .act { font-size: 12px; color: var(--muted); margin-left: 12px; opacity: 0; transition: opacity .15s; cursor: pointer; }
+  .act:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
+  .row:hover .act { opacity: 1; }
+  @media (hover: none) { .act { opacity: 1; } }
+  .row.static { cursor: default; }
+  .row.static:hover { background: transparent; }
+  details.excluded { margin-top: 48px; }
+  details.excluded summary {
+    cursor: pointer; list-style: none; font-size: 12px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--muted); padding: 0 4px 10px; border-bottom: 1px solid var(--line);
+  }
+  details.excluded summary::-webkit-details-marker { display: none; }
+  details.excluded summary::before { content: "›"; display: inline-block; width: 14px; transition: transform .15s; }
+  details.excluded[open] summary::before { transform: rotate(90deg); }
+  details.excluded summary .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  details.excluded .note { color: var(--muted); font-size: 13px; margin: 14px 4px 4px; }
+
   pre.log {
     margin: 0 4px 14px 74px; padding: 12px 14px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--muted); background: var(--hover); border-radius: 8px; white-space: pre-wrap; word-break: break-word;
@@ -238,18 +255,54 @@ function renderOverall() {
   spans[1].textContent = `${Math.round(pct)}%`;
 }
 
+const excluded = () => data.excluded || {};
+const isEx = i => i.key in excluded();
 function pending() { return data.items.filter(i => !i.updated); }
+let exOpen = false;
+
+function iconHtml(path, kind) {
+  return path
+    ? `<img class="icon" src="/api/icon?path=${encodeURIComponent(path)}" alt="" onerror="this.className='icon blank';this.removeAttribute('src')">`
+    : kind === "formula" ? '<div class="icon term">&gt;_</div>' : '<div class="icon blank"></div>';
+}
+
+function rowHtml(i, busy, ex) {
+  const job = data.jobs[i.id];
+  const st = i.updated ? "done" : job?.status;
+  const status =
+    st === "done" ? "Aggiornata" :
+    st === "running" ? (job.pct !== null && job.pct !== undefined ? "" : '<span class="spin"></span>') :
+    st === "queued" ? "" :
+    st === "error" ? "Non riuscito" : "";
+  const act = busy || st === "running" || st === "queued" ? "" :
+    `<span class="act" data-act="${ex ? "include" : "exclude"}">${ex ? "Includi" : "Escludi"}</span>`;
+  return `<li class="${st === "done" ? "done" : ""}">
+    <div class="row" data-id="${esc(i.id)}" data-key="${esc(i.key)}">
+      <input type="checkbox" ${selected.has(i.id) ? "checked" : ""} ${busy || i.updated ? "disabled" : ""}>
+      ${iconHtml(i.path, i.kind)}
+      <div style="min-width:0">
+        <div class="name">${esc(i.name)}${i.major ? '<span class="tag">versione maggiore</span>' : ""}${i.verified === false ? '<span class="tag">da verificare</span>' : ""}</div>
+        <div class="meta">${esc(i.installed)}<span class="arrow">→</span>${esc(i.latest)} · ${esc(i.source)}</div>
+      </div>
+      <div class="status ${st || ""}">${status}${act}</div>
+      ${st === "running" || st === "queued" ? jobProgress(i.id, job) : ""}
+    </div>
+    ${openLogs.has(i.id) && job?.log ? `<pre class="log">${esc(job.log)}</pre>` : ""}
+  </li>`;
+}
 
 function render() {
   const busy = data.scanning || data.running;
   const items = data.items;
-  const todo = pending();
+  const main = items.filter(i => !isEx(i));
+  const todo = main.filter(i => !i.updated);
+  const allPending = pending();
 
   if (firstLoad && !data.scanning) {
     todo.forEach(i => { if (!i.major && i.verified !== false) selected.add(i.id); });
     firstLoad = false;
   }
-  for (const id of [...selected]) if (!todo.find(i => i.id === id)) selected.delete(id);
+  for (const id of [...selected]) if (!allPending.find(i => i.id === id)) selected.delete(id);
 
   $("#sub").innerHTML = data.scanning
     ? '<span class="spin"></span>Controllo in corso…'
@@ -261,71 +314,76 @@ function render() {
   renderOverall();
   $("#scan").disabled = busy;
   const n = selected.size;
+  const nMain = todo.filter(i => selected.has(i.id)).length;
   $("#go").disabled = busy || n === 0;
-  $("#go").textContent = n && n === todo.length ? "Aggiorna tutto" : n ? `Aggiorna (${n})` : "Aggiorna";
+  $("#go").textContent = n && n === todo.length && nMain === n ? "Aggiorna tutto" : n ? `Aggiorna (${n})` : "Aggiorna";
 
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
   $("#pwlabel").textContent = data.password ? "Password di amministratore salvata" : "Password di amministratore non impostata";
 
-  if (!items.length) {
-    $("#list").innerHTML = data.scanning ? "" :
-      '<div class="empty"><strong>Tutto aggiornato</strong>Nessuna app ha bisogno di aggiornamenti.</div>';
-    return;
-  }
-
-  const sig = JSON.stringify([busy, n, [...selected], [...openLogs], items.map(i => {
+  const sig = JSON.stringify([busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), items.map(i => {
     const j = data.jobs[i.id];
     return [i.id, i.updated, j?.status, openLogs.has(i.id) ? j?.log : ""];
   })]);
   if (sig === lastSig) return patchProgress();
   lastSig = sig;
 
-  const groups = [
-    ["Applicazioni", items.filter(i => i.kind !== "formula")],
-    ["Strumenti da riga di comando", items.filter(i => i.kind === "formula")],
-  ].filter(g => g.length && g[1].length);
-
-  let html = `<div class="bar"><label><input type="checkbox" id="all" ${todo.length && n === todo.length ? "checked" : ""} ${busy || !todo.length ? "disabled" : ""}> Seleziona tutto</label><span>${n} di ${todo.length}</span></div>`;
-
-  for (const [title, list] of groups) {
-    html += `<h2>${title}</h2><ul>`;
-    for (const i of list) {
-      const job = data.jobs[i.id];
-      const st = i.updated ? "done" : job?.status;
-      const status =
-        st === "done" ? "Aggiornata" :
-        st === "running" ? (job.pct !== null && job.pct !== undefined ? "" : '<span class="spin"></span>') :
-        st === "queued" ? "" :
-        st === "error" ? "Non riuscito" : "";
-      const icon = i.path
-        ? `<img class="icon" src="/api/icon?path=${encodeURIComponent(i.path)}" alt="" onerror="this.className='icon blank';this.removeAttribute('src')">`
-        : i.kind === "formula" ? '<div class="icon term">&gt;_</div>' : '<div class="icon blank"></div>';
-      html += `<li class="${st === "done" ? "done" : ""}">
-        <div class="row" data-id="${esc(i.id)}">
-          <input type="checkbox" ${selected.has(i.id) ? "checked" : ""} ${busy || i.updated ? "disabled" : ""}>
-          ${icon}
-          <div style="min-width:0">
-            <div class="name">${esc(i.name)}${i.major ? '<span class="tag">versione maggiore</span>' : ""}${i.verified === false ? '<span class="tag">da verificare</span>' : ""}</div>
-            <div class="meta">${esc(i.installed)}<span class="arrow">→</span>${esc(i.latest)} · ${esc(i.source)}</div>
-          </div>
-          <div class="status ${st || ""}">${status}</div>
-          ${st === "running" || st === "queued" ? jobProgress(i.id, job) : ""}
-        </div>
-        ${openLogs.has(i.id) && job?.log ? `<pre class="log">${esc(job.log)}</pre>` : ""}
-      </li>`;
+  let html = "";
+  if (!main.length) {
+    html = data.scanning ? "" : '<div class="empty"><strong>Tutto aggiornato</strong>Nessuna app ha bisogno di aggiornamenti.</div>';
+  } else {
+    html = `<div class="bar"><label><input type="checkbox" id="all" ${todo.length && nMain === todo.length ? "checked" : ""} ${busy || !todo.length ? "disabled" : ""}> Seleziona tutto</label><span>${nMain} di ${todo.length}</span></div>`;
+    const groups = [
+      ["Applicazioni", main.filter(i => i.kind !== "formula")],
+      ["Strumenti da riga di comando", main.filter(i => i.kind === "formula")],
+    ].filter(g => g[1].length);
+    for (const [title, list] of groups) {
+      html += `<h2>${title}</h2><ul>${list.map(i => rowHtml(i, busy, false)).join("")}</ul>`;
     }
-    html += "</ul>";
+  }
+
+  // sezione separata: app escluse dalla verifica
+  const ex = Object.entries(excluded()).sort((a, b) => a[1].name.localeCompare(b[1].name));
+  if (ex.length) {
+    const withUpdate = ex.filter(([k]) => items.some(i => i.key === k && !i.updated)).length;
+    html += `<details class="excluded" ${exOpen ? "open" : ""}>
+      <summary>Escluse · ${ex.length}${withUpdate ? ` <span class="muted">(${withUpdate} con aggiornamento)</span>` : ""}</summary>
+      <p class="note">Queste app non compaiono nell'elenco principale e non vengono mai selezionate in automatico. Puoi comunque aggiornarle da qui quando serve.</p><ul>`;
+    for (const [key, info] of ex) {
+      const it = items.find(i => i.key === key);
+      if (it) { html += rowHtml(it, busy, true); continue; }
+      html += `<li><div class="row static" data-key="${esc(key)}">
+        <span></span>${iconHtml(info.path, info.kind)}
+        <div style="min-width:0"><div class="name">${esc(info.name)}</div><div class="meta">${data.scanning ? "Controllo in corso…" : "Nessun aggiornamento"}</div></div>
+        <div class="status">${busy ? "" : '<span class="act" data-act="include">Includi</span>'}</div>
+      </div></li>`;
+    }
+    html += "</ul></details>";
   }
   $("#list").innerHTML = html;
+  const det = $("#list details.excluded");
+  if (det) det.addEventListener("toggle", () => { exOpen = det.open; });
 }
 
-$("#list").addEventListener("click", e => {
+$("#list").addEventListener("click", async e => {
   if (e.target.id === "all") {
-    if (e.target.checked) pending().forEach(i => selected.add(i.id)); else selected.clear();
+    const main = pending().filter(i => !isEx(i));
+    if (e.target.checked) main.forEach(i => selected.add(i.id)); else main.forEach(i => selected.delete(i.id));
+    return render();
+  }
+  const actEl = e.target.closest("[data-act]");
+  if (actEl) {
+    e.stopPropagation();
+    const row = actEl.closest(".row");
+    const key = row.dataset.key;
+    const exclude = actEl.dataset.act === "exclude";
+    const it = data.items.find(i => i.key === key);
+    if (exclude && it) selected.delete(it.id);
+    data = await api("/api/exclude", { key, exclude, name: it?.name, path: it?.path, kind: it?.kind });
     return render();
   }
   const row = e.target.closest(".row");
-  if (!row) return;
+  if (!row || row.classList.contains("static")) return;
   const id = row.dataset.id;
   const job = data.jobs[id];
   if (job && (job.status === "error" || e.target.closest(".status"))) {
