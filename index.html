@@ -123,6 +123,8 @@
   .hint.warn { color: var(--err); }
   .settings-actions { margin-left: 30px; }
   footer details + details { margin-top: 18px; }
+  .version { margin-top: 32px !important; font-size: 12px; }
+  .version a { color: var(--muted); }
   .notice {
     display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 16px;
     border: 1px solid var(--line); border-radius: 12px; margin-bottom: 28px; font-size: 14px;
@@ -206,6 +208,7 @@
       La password viene salvata solo nel Portachiavi di questo Mac e serve a completarli senza chiedere nulla.</p>
       <p id="pwmsg"></p>
     </details>
+    <p class="version" id="version"></p>
   </footer>
 </main>
 
@@ -383,6 +386,8 @@ function render() {
   $("#go").disabled = busy || n === 0;
   $("#go").textContent = n && n === todo.length && nMain === n ? "Aggiorna tutto" : n ? `Aggiorna (${n})` : "Aggiorna";
 
+  if (data.version && !$("#version").textContent)
+    $("#version").innerHTML = `Versione ${esc(data.version)} · <a href="https://github.com/giuseppelupo1979/aggiornamenti-mac/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Novità</a>`;
   renderSettings();
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
   $("#pwlabel").textContent = data.password ? "Password di amministratore salvata" : "Password di amministratore non impostata";

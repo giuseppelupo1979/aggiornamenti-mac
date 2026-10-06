@@ -29,6 +29,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+VERSION = "1.5.0"   # tenere allineata con CHANGELOG.md
 HOST, PORT = "127.0.0.1", 8765
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.expanduser("~/Library/Caches/AggiornamentiMac")
@@ -951,6 +952,7 @@ class Handler(BaseHTTPRequestHandler):
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
                 "scan_error": state["scan_error"], "items": state["items"],
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
+                "version": VERSION,
                 "password": has_password(),
                 "excluded": load_excluded(),
                 "unchecked": state["unchecked"], "macos": state["macos"],

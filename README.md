@@ -4,7 +4,7 @@ Una pagina web locale, sobria, che trova tutte le app del Mac da aggiornare e le
 
 Gira solo sul tuo computer (`127.0.0.1`), usa soltanto la libreria standard di Python e strumenti già diffusi nel mondo Mac (Homebrew e `mas`).
 
-Il manuale d'uso completo è in [MANUALE.md](MANUALE.md).
+Il manuale d'uso completo è in [MANUALE.md](MANUALE.md), le novità di ogni versione in [CHANGELOG.md](CHANGELOG.md).
 
 ## Cosa controlla
 
@@ -69,6 +69,7 @@ Le app aperte vengono chiuse, aggiornate e riaperte in background. Ogni pacchett
 | `Aggiornamenti.command` | avvio con doppio clic |
 | `installa.sh` | preparazione dell'ambiente, app sulla Scrivania, avvio automatico |
 | `MANUALE.md` | manuale d'uso |
+| `CHANGELOG.md` | novità di ogni versione |
 
 ## Disinstallazione
 
