@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.5.0"   # tenere allineata con CHANGELOG.md
+VERSION = "1.6.0"   # tenere allineata con CHANGELOG.md
 HOST, PORT = "127.0.0.1", 8765
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.expanduser("~/Library/Caches/AggiornamentiMac")
@@ -75,6 +75,7 @@ state = {
     "batch": None,        # {total, done} del giro di aggiornamenti in corso
     "unchecked": [],      # app che nessuna fonte sa controllare
     "macos": [],          # aggiornamenti di sistema disponibili
+    "cleaning": False,
 }
 
 
@@ -112,6 +113,7 @@ DEFAULT_SETTINGS = {
     "last_check_day": None,
     "last_auto_day": None,
     "last_auto": None,       # {at, updated, failed, postponed}
+    "last_cleanup": None,    # {at, freed}
 }
 
 
@@ -235,6 +237,9 @@ def auto_update():
             parts.append(plural(len(failed), "non riuscita", "non riuscite"))
         if postponed:
             parts.append(plural(len(postponed), "rimandata perché aperta", "rimandate perché aperte"))
+        lc = load_settings().get("last_cleanup") or {}
+        if ids and lc.get("freed"):
+            parts.append(f"liberati {human(lc['freed'])}")
         notify("Aggiornamento automatico", ", ".join(parts))
 
 
@@ -886,6 +891,46 @@ def update_one(item):
             state["items"] = [i for i in state["items"] if i["id"] != jid] + [{**item, "updated": True}]
 
 
+def human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.1f} {unit}".replace(".0 ", " ") if unit != "B" else f"{n} B"
+        n /= 1024
+
+
+def cleanup():
+    """Cancella installer scaricati, vecchie versioni e file temporanei. Restituisce i byte liberati."""
+    with lock:
+        state["cleaning"] = True
+    freed = 0
+    try:
+        rc, out = run([BREW, "cleanup", "--prune=all", "-s"], timeout=1800)
+        m = re.search(r"freed approximately ([\d.]+)\s*([KMGT]?B)", out)
+        if m:
+            freed += int(float(m.group(1)) * 1024 ** "BKMGT".index(m.group(2)[0]))
+        # file temporanei lasciati da aggiornamenti interrotti
+        for d in glob.glob(os.path.join(CACHE, "agg-*")):
+            size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(d) for f in fs
+                       if not os.path.islink(os.path.join(r, f)))
+            shutil.rmtree(d, ignore_errors=True)
+            freed += size
+        # icone di versioni ormai sostituite: si rigenerano al bisogno
+        icons = os.path.join(CACHE, "icons")
+        if os.path.isdir(icons):
+            for f in glob.glob(os.path.join(icons, "*.png")):
+                if time.time() - os.path.getmtime(f) > 7 * 86400:
+                    freed += os.path.getsize(f)
+                    os.remove(f)
+    except Exception as e:
+        print("cleanup:", e, flush=True)
+    s = load_settings()
+    s["last_cleanup"] = {"at": time.time(), "freed": freed}
+    save_settings(s)
+    with lock:
+        state["cleaning"] = False
+    return freed
+
+
 def do_updates(ids):
     with lock:
         todo = [i for i in state["items"] if i["id"] in ids and not i.get("updated")]
@@ -899,6 +944,8 @@ def do_updates(ids):
         update_one(item)
         with lock:
             state["batch"]["done"] += 1
+    if todo:
+        cleanup()
     with lock:
         state["running"] = False
 
@@ -952,6 +999,7 @@ class Handler(BaseHTTPRequestHandler):
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
                 "scan_error": state["scan_error"], "items": state["items"],
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
+                "cleaning": state["cleaning"],
                 "version": VERSION,
                 "password": has_password(),
                 "excluded": load_excluded(),
@@ -1022,6 +1070,19 @@ class Handler(BaseHTTPRequestHandler):
             if "login" in body:
                 set_login(bool(body["login"]))
             return self.send(200, self.snapshot())
+        if u.path == "/api/cleanup":
+            with lock:
+                if state["running"] or state["scanning"] or state["cleaning"]:
+                    return self.send(409, {"error": "Attendi la fine dell'operazione in corso"})
+                state["running"] = True
+            def job():
+                try:
+                    cleanup()
+                finally:
+                    with lock:
+                        state["running"] = False
+            threading.Thread(target=job, daemon=True).start()
+            return self.send(200, self.snapshot())
         if u.path == "/api/notify-test":
             notify("Aggiornamenti", "Le notifiche funzionano. Un clic qui apre la pagina.")
             return self.send(200, self.snapshot())
@@ -1075,6 +1136,8 @@ def main():
         sys.exit(0)
     threading.Thread(target=do_scan, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
+    for d in glob.glob(os.path.join(CACHE, "agg-*")):
+        shutil.rmtree(d, ignore_errors=True)
     print(f"Aggiornamenti su http://{HOST}:{PORT}")
     srv.serve_forever()
 

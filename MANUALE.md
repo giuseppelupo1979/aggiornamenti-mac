@@ -47,6 +47,12 @@ Se una riga finisce in **Non riuscito**, cliccaci sopra per leggere il dettaglio
 
 **Controlla** ripete la ricerca da capo.
 
+## Spazio su disco
+
+Al termine di ogni giro di aggiornamenti, manuale o notturno, il programma cancella tutto ciò che non serve più: gli installer scaricati, le versioni precedenti degli strumenti da riga di comando e i file temporanei. Restano solo il catalogo delle versioni e le icone, una ventina di MB che servono a ogni controllo.
+
+In **Controllo automatico** trovi quanto spazio ha liberato l'ultima pulizia e il pulsante **Libera spazio ora**, utile anche per programmi installati con Homebrew al di fuori di questa pagina.
+
 ## Escludere un'app
 
 Passando con il mouse su una riga compare a destra **Escludi**. L'app sparisce dall'elenco principale: non viene più contata, non viene selezionata in automatico e non rientra in **Aggiorna tutto**. Utile per le app che vuoi tenere a una versione precisa, quelle con licenza legata alla versione o i falsi aggiornamenti.

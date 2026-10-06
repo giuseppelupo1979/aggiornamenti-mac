@@ -2,6 +2,16 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.6.0] - 2026-10-06
+
+### Aggiunto
+- Pulizia automatica al termine di ogni giro di aggiornamenti, manuale o notturno: installer scaricati, vecchie versioni degli strumenti Homebrew, file temporanei e icone non più usate (`brew cleanup --prune=all -s`).
+- Pulsante "Libera spazio ora" e indicazione dello spazio liberato nell'ultima pulizia; il resoconto dell'aggiornamento notturno riporta anche lo spazio liberato.
+- All'avvio vengono rimossi i file temporanei lasciati da aggiornamenti interrotti.
+
+### Corretto
+- Homebrew conservava ogni installer scaricato e le versioni precedenti degli strumenti: sul Mac di prova la prima pulizia ha liberato 6,4 GB.
+
 ## [1.5.0] - 2026-10-06
 
 ### Aggiunto

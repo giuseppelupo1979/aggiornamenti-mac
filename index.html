@@ -194,7 +194,8 @@
         <label class="opt"><input type="checkbox" id="s_login"> <span>Avvia Aggiornamenti all'accesso</span></label>
         <p class="hint" id="loginhint"></p>
         <p class="hint" id="lastauto"></p>
-        <div class="settings-actions"><button type="button" id="s_test">Prova una notifica</button></div>
+        <div class="settings-actions"><button type="button" id="s_test">Prova una notifica</button> <button type="button" id="s_clean">Libera spazio ora</button></div>
+        <p class="hint" id="lastclean"></p>
       </div>
     </details>
     <details>
@@ -238,6 +239,12 @@ function ago(t) {
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+function size(b) {
+  if (!b) return "0 MB";
+  return b >= 1073741824 ? (b / 1073741824).toLocaleString("it-IT", { maximumFractionDigits: 1 }) + " GB"
+    : (b / 1048576).toLocaleString("it-IT", { maximumFractionDigits: 0 }) + " MB";
+}
+
 function mb(b) { return (b / 1048576).toLocaleString("it-IT", { maximumFractionDigits: b < 10485760 ? 1 : 0 }); }
 
 function bar(pct) {
@@ -280,7 +287,7 @@ let lastSig = "";
 
 function renderOverall() {
   const b = data.batch;
-  if (!data.running || !b || !b.total) { $("#overall").innerHTML = ""; return; }
+  if (!data.running || !b || !b.total || data.cleaning) { $("#overall").innerHTML = ""; return; }
   const cur = Object.values(data.jobs).find(j => j.status === "running");
   const pct = 100 * (b.done + (cur && cur.pct ? cur.pct / 100 : 0)) / b.total;
   if (!$("#overall .overall")) $("#overall").innerHTML = `<div class="overall">${bar(0)}<div class="phase"><span></span><span></span></div></div>`;
@@ -344,6 +351,9 @@ function renderSettings() {
   const hint = $("#loginhint");
   hint.textContent = on && !st.login ? "Il controllo automatico funziona solo mentre Aggiornamenti è attivo: attiva l'avvio all'accesso perché resti attivo anche dopo un riavvio." : "";
   hint.className = "hint" + (on && !st.login ? " warn" : "");
+  const lc = st.last_cleanup;
+  $("#lastclean").textContent = data.cleaning ? "Pulizia in corso…" : lc ? `Dopo ogni giro di aggiornamenti installer e vecchie versioni vengono cancellati. Ultima pulizia: ${ago(lc.at)}, liberati ${size(lc.freed)}.` : "Dopo ogni giro di aggiornamenti installer e vecchie versioni vengono cancellati.";
+  $("#s_clean").disabled = data.running || data.scanning || data.cleaning;
   const la = st.last_auto;
   $("#lastauto").textContent = la ? `Ultimo aggiornamento automatico: ${ago(la.at)} · ${la.updated.length} aggiornate${la.failed.length ? `, ${la.failed.length} non riuscite (${la.failed.join(", ")})` : ""}${la.postponed.length ? `, rimandate perché aperte: ${la.postponed.join(", ")}` : ""}` : "";
 }
@@ -357,6 +367,7 @@ $("#s_auto").onchange = e => saveSettings({ auto_update: e.target.checked });
 $("#s_login").onchange = e => saveSettings({ login: e.target.checked });
 $("#s_check_time").onchange = e => e.target.value && saveSettings({ check_time: e.target.value });
 $("#s_auto_time").onchange = e => e.target.value && saveSettings({ auto_time: e.target.value });
+$("#s_clean").onclick = async () => { try { data = await api("/api/cleanup", {}); } catch (e) { alert(e.message); } render(); };
 $("#s_test").onclick = async () => { await api("/api/notify-test", {}); };
 
 function render() {
@@ -374,6 +385,7 @@ function render() {
 
   $("#sub").innerHTML = data.scanning
     ? '<span class="spin"></span>Controllo in corso…'
+    : data.cleaning ? '<span class="spin"></span>Pulizia della cache…'
     : data.running ? "Aggiornamento in corso…"
     : data.scan_error ? "Errore: " + esc(data.scan_error)
     : todo.length === 0 ? `Tutto aggiornato · ${ago(data.scanned_at)}`
