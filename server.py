@@ -491,6 +491,26 @@ def team_id(app):
     return m.group(1) if m and m.group(1) != "not" else None
 
 
+def install_pkg(pkg, old_team, jid, log):
+    """Installa un .pkg solo se firmato da Apple Developer ID dello stesso sviluppatore dell'app."""
+    set_progress(jid, phase="Verifica della firma", pct=76)
+    rc, out = run(["pkgutil", "--check-signature", pkg], timeout=120)
+    m = re.search(r"Developer ID Installer: .*\((\w+)\)", out)
+    if rc != 0 or not m:
+        log("Pacchetto senza firma Developer ID valida: annullato per sicurezza\n" + out)
+        return False
+    if old_team and m.group(1) != old_team:
+        log(f"Pacchetto firmato da {m.group(1)} invece di {old_team}: annullato per sicurezza")
+        return False
+    if not has_password():
+        log("Questo aggiornamento è un pacchetto di installazione e serve la password di amministratore: impostala in basso nella pagina.")
+        return False
+    set_progress(jid, phase="Installazione", pct=82)
+    rc, out = run(["sudo", "-A", "installer", "-pkg", pkg, "-target", "/"])
+    log(out)
+    return rc == 0
+
+
 def install_sparkle(item, log):
     url, dest, jid = item["url"], item["path"], item["id"]
     old_team = team_id(dest)
@@ -514,10 +534,7 @@ def install_sparkle(item, log):
         lower = fname.lower()
         new_app, mount = None, None
         if lower.endswith((".pkg", ".mpkg")):
-            set_progress(jid, phase="Installazione", pct=80)
-            rc, out = run(["sudo", "-A", "installer", "-pkg", archive, "-target", "/"])
-            log(out)
-            return rc == 0
+            return install_pkg(archive, old_team, jid, log)
         if lower.endswith(".dmg"):
             mount = os.path.join(work, "mnt")
             rc, out = run(["hdiutil", "attach", "-nobrowse", "-noautoopen", "-mountpoint", mount, archive])
@@ -542,7 +559,11 @@ def install_sparkle(item, log):
             cands = glob.glob(os.path.join(search, "*.app")) + glob.glob(os.path.join(search, "*", "*.app"))
             new_app = next((c for c in cands if os.path.basename(c) == target), cands[0] if cands else None)
             if not new_app:
-                log("Nessuna app trovata nell'archivio")
+                # alcuni sviluppatori (es. NordVPN) mettono nell'archivio un installer .pkg
+                pkgs = glob.glob(os.path.join(search, "*.pkg")) + glob.glob(os.path.join(search, "*", "*.pkg"))
+                if pkgs:
+                    return install_pkg(pkgs[0], old_team, jid, log)
+                log("Nessuna app né pacchetto di installazione trovati nell'archivio")
                 return False
             set_progress(jid, phase="Verifica della firma", pct=78)
             new_team = team_id(new_app)
