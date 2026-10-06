@@ -55,6 +55,32 @@ Le app escluse finiscono in fondo alla pagina, nella sezione chiusa **Escluse**.
 
 L'elenco delle esclusioni è salvato in `~/Library/Application Support/AggiornamentiMac/esclusi.json` e resta valido anche dopo il riavvio del Mac.
 
+## Controllo automatico e notifiche
+
+In fondo alla pagina apri **Controllo automatico**. Le opzioni sono tre.
+
+**Controlla ogni giorno alle…** (attiva di serie, alle 9:00): a quell'ora il programma cerca gli aggiornamenti e, se ne trova, ti manda una notifica di macOS con il numero e i primi nomi. Un clic sulla notifica apre la pagina. La prima volta macOS potrebbe chiederti di consentire le notifiche: accetta, altrimenti non le vedrai. Il pulsante **Prova una notifica** serve proprio a controllarlo.
+
+**Aggiorna da solo ogni notte alle…** (spenta di serie): a quell'ora il programma controlla e aggiorna senza chiederti nulla, poi ti lascia una notifica con il resoconto. Per prudenza tocca solo le app non escluse, salta le versioni maggiori e gli abbinamenti da verificare, e non chiude mai un'app aperta: se la stai usando la rimanda alla notte dopo. Sotto le opzioni trovi l'esito dell'ultimo giro automatico.
+
+**Avvia Aggiornamenti all'accesso**: perché i controlli pianificati funzionino il programma deve essere attivo. Con questa opzione parte da solo a ogni accesso al Mac, in silenzio, senza aprire finestre. Finché è spenta, la pagina mostra un avviso in rosso.
+
+Se il Mac dorme all'ora prevista, il controllo parte appena si risveglia. Se imposti un orario già passato oggi, il primo giro sarà domani.
+
+## App non controllate
+
+In fondo all'elenco c'è la sezione chiusa **Non controllate**. Contiene le app per cui il programma non ha trovato una fonte di aggiornamento che sappia leggere, con il motivo:
+
+- *Nessuna fonte di aggiornamento conosciuta*: l'app non è nel catalogo Homebrew e non ha un canale Sparkle;
+- *Il catalogo Homebrew non indica il numero di versione*: l'app è nel catalogo, ma senza versione da confrontare;
+- *Il sito dello sviluppatore non ha risposto* o *Canale di aggiornamento non sicuro*: il canale esiste ma non è utilizzabile.
+
+Non significa che siano vecchie, solo che nessuno le ha verificate. **Cerca** apre una ricerca sul web per la pagina di download. Le app di Apple e le scorciatoie di Google Drive non compaiono, perché si aggiornano insieme a macOS e a Drive.
+
+## Aggiornamenti di macOS
+
+Se c'è un aggiornamento del sistema, in cima all'elenco compare un riquadro con il nome della versione e il pulsante **Apri Impostazioni**, che porta direttamente alla pagina Aggiornamento Software. Il programma non installa macOS da solo, perché di solito richiede un riavvio.
+
 ## La password di amministratore
 
 Alcuni aggiornamenti richiedono i privilegi di amministratore: tutti quelli del Mac App Store e le app che si installano con un pacchetto `.pkg`. Per farli in silenzio il programma ha bisogno della password del Mac.
@@ -73,7 +99,7 @@ Senza password tutto il resto funziona lo stesso: solo gli aggiornamenti che la 
 ## Limiti da conoscere
 
 - Le app che si aggiornano da sole con sistemi propri (Microsoft AutoUpdate, Adobe Creative Cloud, Google Chrome) vengono gestite solo se presenti nel catalogo Homebrew.
-- Gli aggiornamenti di macOS non sono inclusi: si fanno da Impostazioni di Sistema.
+- Gli aggiornamenti di macOS vengono segnalati ma non installati: si fanno da Impostazioni di Sistema.
 - Il confronto delle versioni è numerico. Se uno sviluppatore numera in modo strano (2.6.4 contro 2.26) può comparire un falso aggiornamento: in quel caso basta deselezionarlo.
 
 ## Chiudere il programma

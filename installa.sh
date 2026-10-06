@@ -14,6 +14,7 @@ fi
 
 command -v python3 >/dev/null 2>&1 || brew install python
 command -v mas >/dev/null 2>&1 || brew install mas
+command -v terminal-notifier >/dev/null 2>&1 || brew install terminal-notifier
 
 chmod +x "$DIR/server.py" "$DIR/askpass.sh" "$DIR/Aggiornamenti.command"
 
@@ -29,7 +30,7 @@ if [[ "$ans" =~ ^[sS] ]]; then
   <key>ProgramArguments</key>
   <array><string>$(command -v python3)</string><string>$DIR/server.py</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>StandardOutPath</key><string>$HOME/Library/Logs/AggiornamentiMac.log</string>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/AggiornamentiMac.log</string>
 </dict>

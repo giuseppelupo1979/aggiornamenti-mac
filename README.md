@@ -11,10 +11,12 @@ Il manuale d'uso completo è in [MANUALE.md](MANUALE.md).
 | Fonte | Come trova gli aggiornamenti | Come aggiorna |
 |---|---|---|
 | App installate con Homebrew | `brew outdated --greedy` | `brew upgrade --cask` |
-| App installate a mano | confronto con il [catalogo Homebrew](https://formulae.brew.sh) | `brew install --cask --force` (da qui in poi gestite da Homebrew) |
+| App installate a mano | confronto con il [catalogo Homebrew](https://formulae.brew.sh), per nome dell'app o per bundle id | `brew install --cask --force` (da qui in poi gestite da Homebrew) |
 | Mac App Store | `mas outdated` | `mas update` |
 | App con Sparkle non presenti nel catalogo | feed di aggiornamento dello sviluppatore | download, verifica della firma, sostituzione |
 | Strumenti da riga di comando | `brew outdated` | `brew upgrade --formula` |
+
+Può controllare da solo ogni giorno e avvisarti con una notifica, oppure aggiornare tutto di notte senza toccare le app aperte. Una sezione elenca le app che nessuna fonte sa controllare, e in cima compaiono gli aggiornamenti di macOS disponibili.
 
 Le app aperte vengono chiuse, aggiornate e riaperte in background. Ogni pacchetto mostra una barra di avanzamento con la fase in corso, e le app che non vuoi toccare si possono escludere: finiscono in una sezione separata da cui puoi comunque aggiornarle a mano.
 
@@ -24,6 +26,7 @@ Le app aperte vengono chiuse, aggiornate e riaperte in background. Ogni pacchett
 - [Homebrew](https://brew.sh)
 - Python 3 (quello di Homebrew va benissimo)
 - [`mas`](https://github.com/mas-cli/mas) per il Mac App Store, accesso all'App Store già effettuato
+- [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) per le notifiche cliccabili (facoltativo: senza, le notifiche arrivano lo stesso ma il clic non apre la pagina)
 
 ## Installazione
 
@@ -39,7 +42,7 @@ Le app aperte vengono chiuse, aggiornate e riaperte in background. Ogni pacchett
    git clone https://github.com/giuseppelupo1979/aggiornamenti-mac.git ~/aggiornamenti-mac
    ```
 
-3. Prepara l'ambiente (installa `python3` e `mas` se mancano, e chiede se avviare il programma a ogni accesso):
+3. Prepara l'ambiente (installa `python3`, `mas` e `terminal-notifier` se mancano, e chiede se avviare il programma a ogni accesso):
 
    ```bash
    ~/aggiornamenti-mac/installa.sh
@@ -80,6 +83,6 @@ poi cancella la cartella del progetto e l'app `Aggiornamenti` dalla Scrivania.
 
 ## Limiti
 
-- Gli aggiornamenti di macOS non sono inclusi.
+- Gli aggiornamenti di macOS vengono solo segnalati, non installati.
 - Le app con sistemi di aggiornamento propri (Microsoft AutoUpdate, Adobe) sono coperte solo se presenti nel catalogo Homebrew.
 - Il confronto delle versioni è numerico: numerazioni insolite possono generare qualche falso positivo, che basta deselezionare.

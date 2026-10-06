@@ -11,6 +11,7 @@ Solo libreria standard. Ascolta soltanto su 127.0.0.1.
 """
 
 import concurrent.futures as cf
+import datetime as dt
 import glob
 import hashlib
 import json
@@ -19,6 +20,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -38,6 +40,10 @@ APP_DIRS = ["/Applications", "/Applications/Utilities", os.path.expanduser("~/Ap
 
 SUPPORT = os.path.expanduser("~/Library/Application Support/AggiornamentiMac")
 EXCLUDED_FILE = os.path.join(SUPPORT, "esclusi.json")
+SETTINGS_FILE = os.path.join(SUPPORT, "impostazioni.json")
+LAUNCH_LABEL = "com.aggiornamenti-mac"
+LAUNCH_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCH_LABEL}.plist")
+PAGE_URL = f"http://{HOST}:{PORT}"
 
 os.makedirs(CACHE, exist_ok=True)
 os.makedirs(SUPPORT, exist_ok=True)
@@ -66,6 +72,8 @@ state = {
     "jobs": {},           # id -> {status, log}
     "running": False,
     "batch": None,        # {total, done} del giro di aggiornamenti in corso
+    "unchecked": [],      # app che nessuna fonte sa controllare
+    "macos": [],          # aggiornamenti di sistema disponibili
 }
 
 
@@ -91,6 +99,172 @@ def save_excluded(data):
     with open(tmp, "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, EXCLUDED_FILE)
+
+
+# ---------------------------------------------------------------- impostazioni e pianificazione
+
+DEFAULT_SETTINGS = {
+    "daily_check": True,     # controllo giornaliero con notifica
+    "check_time": "09:00",
+    "auto_update": False,    # aggiornamento automatico notturno
+    "auto_time": "03:00",
+    "last_check_day": None,
+    "last_auto_day": None,
+    "last_auto": None,       # {at, updated, failed, postponed}
+}
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE) as f:
+            return {**DEFAULT_SETTINGS, **json.load(f)}
+    except Exception:
+        return dict(DEFAULT_SETTINGS)
+
+
+def save_settings(data):
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, SETTINGS_FILE)
+
+
+def login_enabled():
+    return os.path.exists(LAUNCH_PLIST)
+
+
+def set_login(enabled):
+    """Avvio all'accesso tramite LaunchAgent dell'utente."""
+    domain = f"gui/{os.getuid()}"
+    if not enabled:
+        run(["launchctl", "bootout", f"{domain}/{LAUNCH_LABEL}"], timeout=30)
+        if os.path.exists(LAUNCH_PLIST):
+            os.remove(LAUNCH_PLIST)
+        return
+    log_path = os.path.expanduser("~/Library/Logs/AggiornamentiMac.log")
+    plist = {
+        "Label": LAUNCH_LABEL,
+        "ProgramArguments": [sys.executable, os.path.join(ROOT, "server.py")],
+        "RunAtLoad": True,
+        # riavvia solo se il server cade; se la porta è già occupata esce con 0 e si ferma
+        "KeepAlive": {"SuccessfulExit": False},
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+    os.makedirs(os.path.dirname(LAUNCH_PLIST), exist_ok=True)
+    with open(LAUNCH_PLIST, "wb") as f:
+        plistlib.dump(plist, f)
+    run(["launchctl", "bootout", f"{domain}/{LAUNCH_LABEL}"], timeout=30)
+    run(["launchctl", "bootstrap", domain, LAUNCH_PLIST], timeout=30)
+
+
+def notify(title, message):
+    tn = shutil.which("terminal-notifier", path=ENV["PATH"])
+    if tn:
+        run([tn, "-title", title, "-message", message, "-open", PAGE_URL,
+             "-group", "aggiornamenti-mac"], timeout=30)
+    else:
+        esc = lambda t: t.replace("\\", "\\\\").replace('"', '\\"')
+        run(["osascript", "-e", f'display notification "{esc(message)}" with title "{esc(title)}"'], timeout=30)
+
+
+def visible_pending():
+    excluded = load_excluded()
+    with lock:
+        return [i for i in state["items"] if not i.get("updated") and i.get("key") not in excluded]
+
+
+def plural(n, one, many):
+    return f"{n} {one if n == 1 else many}"
+
+
+def start_scan_sync():
+    """Esegue una scansione e aspetta che finisca; se ne è già in corso una, ne attende l'esito."""
+    with lock:
+        if state["running"]:
+            return False
+        already = state["scanning"]
+        state["scanning"] = True
+    if not already:
+        do_scan()
+        return True
+    while True:
+        time.sleep(2)
+        with lock:
+            if not state["scanning"]:
+                return True
+
+
+def scheduled_check():
+    if not start_scan_sync():
+        return
+    todo = visible_pending()
+    if todo:
+        names = ", ".join(i["name"] for i in todo[:3]) + ("…" if len(todo) > 3 else "")
+        notify(plural(len(todo), "aggiornamento disponibile", "aggiornamenti disponibili"), names)
+
+
+def auto_update():
+    if not start_scan_sync():
+        return
+    candidates = [i for i in visible_pending() if not i.get("major") and i.get("verified") is not False]
+    ids, postponed = [], []
+    for i in candidates:
+        if i["kind"] in ("cask", "adopt", "sparkle") and running_app(i.get("bundle_id")):
+            postponed.append(i["name"])   # mai chiudere un'app mentre la stai usando
+        else:
+            ids.append(i["id"])
+    if ids:
+        with lock:
+            if state["running"] or state["scanning"]:
+                return
+            state["running"] = True
+        do_updates(set(ids))
+    with lock:
+        updated = [i["name"] for i in state["items"] if i["id"] in ids and i.get("updated")]
+        failed = [i["name"] for i in state["items"] if i["id"] in ids and not i.get("updated")]
+    s = load_settings()
+    s["last_auto"] = {"at": time.time(), "updated": updated, "failed": failed, "postponed": postponed}
+    save_settings(s)
+    if updated or failed or postponed:
+        parts = []
+        if updated:
+            parts.append(plural(len(updated), "app aggiornata", "app aggiornate"))
+        if failed:
+            parts.append(plural(len(failed), "non riuscita", "non riuscite"))
+        if postponed:
+            parts.append(plural(len(postponed), "rimandata perché aperta", "rimandate perché aperte"))
+        notify("Aggiornamento automatico", ", ".join(parts))
+
+
+def due(hhmm, last_day, now):
+    try:
+        h, m = map(int, hhmm.split(":"))
+    except Exception:
+        return False
+    return last_day != now.date().isoformat() and now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+def scheduler():
+    """Controlla ogni 30 secondi se è ora del controllo o dell'aggiornamento automatico.
+    Se il Mac dormiva all'ora prevista, recupera appena si risveglia."""
+    while True:
+        time.sleep(30)
+        try:
+            now = dt.datetime.now()
+            today = now.date().isoformat()
+            s = load_settings()
+            if s["auto_update"] and due(s["auto_time"], s["last_auto_day"], now):
+                s["last_auto_day"] = today
+                s["last_check_day"] = today   # l'aggiornamento include già il controllo
+                save_settings(s)
+                auto_update()
+            elif s["daily_check"] and due(s["check_time"], s["last_check_day"], now):
+                s["last_check_day"] = today
+                save_settings(s)
+                scheduled_check()
+        except Exception as e:
+            print("scheduler:", e, flush=True)
 
 
 # ---------------------------------------------------------------- utilità
@@ -266,6 +440,33 @@ def installed_apps():
     return apps
 
 
+_blobs = []   # (cask, testo json minuscolo) per cercare i bundle id
+
+
+def cask_by_bundle_id(app):
+    """Per le cask che installano un .pkg il nome dell'app non compare: cerco il bundle id
+    nella definizione (uninstall, zap). Se ci sono più candidati scelgo quello col nome giusto."""
+    bid = (app["bundle_id"] or "").lower()
+    if not bid:
+        return None
+    rx = re.compile(r'["/]' + re.escape(bid) + r'["/.]')
+    cands = [c for c, blob in _blobs if bid in blob and rx.search(blob)]
+    if len(cands) == 1:
+        return cands[0]
+    slug = re.sub(r"[^a-z0-9]+", "-", app["name"].lower()).strip("-")
+    named = [c for c in cands if c["token"] == slug or app["name"].lower() in [n.lower() for n in c.get("name", [])]]
+    return named[0] if len(named) == 1 else None
+
+
+def installed_for_compare(latest, a):
+    """Alcune app (Microsoft) mostrano 16.113.3 ma il catalogo usa la build 16.113.26092714:
+    se la build ha lo stesso formato della versione del catalogo, confronto con quella."""
+    lp, bp = vparts(latest), vparts(a["build"])
+    if bp and len(bp) == len(lp) and bp[0] == lp[0]:
+        return a["build"]
+    return a["version"]
+
+
 def cask_catalog():
     path = os.path.join(CACHE, "cask.json")
     fresh = os.path.exists(path) and time.time() - os.path.getmtime(path) < 6 * 3600
@@ -281,9 +482,11 @@ def cask_catalog():
     with open(path) as f:
         data = json.load(f)
     by_app = {}
+    _blobs.clear()
     for c in data:
         if c.get("disabled"):
             continue
+        _blobs.append((c, json.dumps(c).lower()))
         for art in c.get("artifacts", []):
             for x in art.get("app", []) if isinstance(art, dict) else []:
                 if isinstance(x, str):
@@ -358,32 +561,56 @@ def sparkle_latest(feed):
 
 def scan_apps(managed_casks):
     catalog = cask_catalog()
-    items, sparkle = [], []
+    items, sparkle, unchecked = [], [], []
+
+    def skip(a, reason):
+        if not a["bundle_id"].startswith("com.apple."):   # le app Apple arrivano con macOS
+            unchecked.append({"name": a["name"], "path": a["path"], "version": a["version"],
+                              "bundle_id": a["bundle_id"], "reason": reason})
+
     for a in installed_apps():
-        if a["mas"]:
-            continue
-        cask = catalog.get(a["file"])
+        if a["mas"] or a["bundle_id"].startswith(("com.google.Chrome.app.", "com.google.drivefs.shortcuts.")):
+            continue   # App Store a parte; web app di Chrome e scorciatoie di Drive seguono l'app madre
+        cask = catalog.get(a["file"]) or cask_by_bundle_id(a)
         if cask and cask["token"] in managed_casks:
             continue  # già coperta da `brew outdated`
         if cask:
             latest = str(cask["version"]).split(",")[0]
-            if latest != "latest" and a["version"] and newer(latest, a["version"]):
+            if latest == "latest" or not vparts(latest):
+                if a["feed"] and str(a["feed"]).startswith("https://"):
+                    sparkle.append(a)
+                else:
+                    skip(a, "Il catalogo Homebrew non indica il numero di versione")
+                continue
+            current = installed_for_compare(latest, a)
+            if not current or not vparts(current):
+                skip(a, "L'app non dichiara la sua versione")
+                continue
+            if newer(latest, current):
                 items.append({
                     "id": "adopt:" + cask["token"], "kind": "adopt", "token": cask["token"],
-                    "name": a["name"], "installed": a["version"], "latest": latest,
+                    "name": a["name"], "installed": current, "latest": latest,
                     "source": "Homebrew", "path": a["path"], "bundle_id": a["bundle_id"],
-                    "major": is_major(latest, a["version"]),
+                    "major": is_major(latest, current),
                     # il bundle id compare nella definizione della cask: abbinamento affidabile
                     "verified": bool(a["bundle_id"]) and a["bundle_id"].lower() in json.dumps(cask).lower(),
                 })
             continue
         if a["feed"] and str(a["feed"]).startswith("https://"):
             sparkle.append(a)
+        elif a["feed"]:
+            skip(a, "Canale di aggiornamento non sicuro (http)")
+        else:
+            skip(a, "Nessuna fonte di aggiornamento conosciuta")
 
     def check(a):
         try:
             best = sparkle_latest(a["feed"])
         except Exception:
+            skip(a, "Il sito dello sviluppatore non ha risposto")
+            return None
+        if not best:
+            skip(a, "Il canale di aggiornamento non contiene versioni leggibili")
             return None
         if best and newer(best["build"], a["build"]):
             return {
@@ -396,7 +623,8 @@ def scan_apps(managed_casks):
 
     with cf.ThreadPoolExecutor(8) as ex:
         items += [r for r in ex.map(check, sparkle) if r]
-    return items
+    unchecked.sort(key=lambda u: u["name"].lower())
+    return items, unchecked
 
 
 def attach_paths(items):
@@ -440,22 +668,32 @@ def cask_catalog_by_token():
         return {}
 
 
+def scan_macos():
+    rc, out = run(["softwareupdate", "-l"], timeout=180)
+    return [m.group(1).strip() for m in re.finditer(r"Title:\s*([^,]+(?:, Version: [^,]+)?)", out)]
+
+
 def do_scan():
     _by_token.clear()
     try:
         run([BREW, "update", "--quiet"], timeout=300, env={**ENV, "HOMEBREW_NO_AUTO_UPDATE": ""})
-        with cf.ThreadPoolExecutor(2) as ex:
+        with cf.ThreadPoolExecutor(3) as ex:
             f_brew = ex.submit(scan_brew)
             f_mas = ex.submit(scan_mas)
+            f_os = ex.submit(scan_macos)
             brew_items, managed = f_brew.result()
             mas_items = f_mas.result()
-        items = brew_items + mas_items + scan_apps(managed)
+            app_items, unchecked = scan_apps(managed)
+            macos = f_os.result()
+        items = brew_items + mas_items + app_items
         items = attach_paths(items)
         for it in items:
             it["key"] = item_key(it)
         order = {"cask": 0, "adopt": 0, "sparkle": 0, "mas": 0, "formula": 1}
         items.sort(key=lambda i: (order[i["kind"]], i["name"].lower()))
         with lock:
+            state["unchecked"] = unchecked
+            state["macos"] = macos
             state["items"] = items
             state["scan_error"] = None
             state["jobs"] = {k: v for k, v in state["jobs"].items() if v["status"] == "running"}
@@ -715,6 +953,9 @@ class Handler(BaseHTTPRequestHandler):
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
                 "password": has_password(),
                 "excluded": load_excluded(),
+                "unchecked": state["unchecked"], "macos": state["macos"],
+                "settings": {**load_settings(), "login": login_enabled(),
+                             "notifier": bool(shutil.which("terminal-notifier", path=ENV["PATH"]))},
             }
 
     def do_GET(self):
@@ -758,6 +999,33 @@ class Handler(BaseHTTPRequestHandler):
                 state["running"] = True
             threading.Thread(target=do_updates, args=(ids,), daemon=True).start()
             return self.send(200, self.snapshot())
+        if u.path == "/api/settings":
+            s = load_settings()
+            now = dt.datetime.now()
+            for flag, tkey, dkey in (("daily_check", "check_time", "last_check_day"),
+                                     ("auto_update", "auto_time", "last_auto_day")):
+                changed = False
+                if flag in body and bool(body[flag]) != s[flag]:
+                    s[flag] = bool(body[flag])
+                    changed = True
+                if tkey in body and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(body[tkey])):
+                    changed = changed or s[tkey] != body[tkey]
+                    s[tkey] = body[tkey]
+                if changed:
+                    # se l'orario di oggi è già passato si parte domani, mai subito
+                    h, m = map(int, s[tkey].split(":"))
+                    passed = now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+                    s[dkey] = now.date().isoformat() if passed else None
+            save_settings(s)
+            if "login" in body:
+                set_login(bool(body["login"]))
+            return self.send(200, self.snapshot())
+        if u.path == "/api/notify-test":
+            notify("Aggiornamenti", "Le notifiche funzionano. Un clic qui apre la pagina.")
+            return self.send(200, self.snapshot())
+        if u.path == "/api/open-software-update":
+            run(["open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"], timeout=15)
+            return self.send(200, self.snapshot())
         if u.path == "/api/exclude":
             key = str(body.get("key") or "")
             if not key:
@@ -798,8 +1066,13 @@ def main():
     os.chmod(ASKPASS, 0o755)
     with lock:
         state["scanning"] = True
+    try:
+        srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError:
+        print("Porta già in uso: Aggiornamenti è già attivo.", flush=True)
+        sys.exit(0)
     threading.Thread(target=do_scan, daemon=True).start()
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    threading.Thread(target=scheduler, daemon=True).start()
     print(f"Aggiornamenti su http://{HOST}:{PORT}")
     srv.serve_forever()
 

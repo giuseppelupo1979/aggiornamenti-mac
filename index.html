@@ -111,6 +111,26 @@
   details.excluded summary .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
   details.excluded .note { color: var(--muted); font-size: 13px; margin: 14px 4px 4px; }
 
+  .settings { margin-top: 14px; display: grid; gap: 10px; max-width: 600px; }
+  .opt { display: flex; gap: 12px; align-items: center; color: var(--fg); font-size: 14px; cursor: pointer; }
+  .opt input[type=checkbox] { flex-shrink: 0; }
+  .opt input[type=time] {
+    font: inherit; font-size: 14px; color: var(--fg); background: transparent; border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 10px; margin: 0 2px; color-scheme: light dark;
+  }
+  .hint { margin: 0 0 4px 30px !important; font-size: 13px; }
+  .hint:empty { display: none; }
+  .hint.warn { color: var(--err); }
+  .settings-actions { margin-left: 30px; }
+  footer details + details { margin-top: 18px; }
+  .notice {
+    display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 16px;
+    border: 1px solid var(--line); border-radius: 12px; margin-bottom: 28px; font-size: 14px;
+  }
+  .notice .meta { white-space: normal; }
+  .act.link { opacity: 1; text-decoration: none; }
+  .reason { white-space: normal; }
+
   pre.log {
     margin: 0 4px 14px 74px; padding: 12px 14px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--muted); background: var(--hover); border-radius: 8px; white-space: pre-wrap; word-break: break-word;
@@ -163,6 +183,18 @@
   <div id="list"></div>
 
   <footer>
+    <details id="settings">
+      <summary><span class="dot" id="autodot"></span><span id="autolabel">Controllo automatico</span></summary>
+      <div class="settings">
+        <label class="opt"><input type="checkbox" id="s_daily"> <span>Controlla ogni giorno alle <input type="time" id="s_check_time"> e avvisami con una notifica</span></label>
+        <label class="opt"><input type="checkbox" id="s_auto"> <span>Aggiorna da solo ogni notte alle <input type="time" id="s_auto_time"></span></label>
+        <p class="hint">Di notte vengono aggiornate solo le app non escluse, senza versioni maggiori né abbinamenti da verificare. Le app aperte non vengono mai chiuse: si rimandano al giro successivo. Se il Mac dorme all'ora prevista, il controllo parte appena si risveglia.</p>
+        <label class="opt"><input type="checkbox" id="s_login"> <span>Avvia Aggiornamenti all'accesso</span></label>
+        <p class="hint" id="loginhint"></p>
+        <p class="hint" id="lastauto"></p>
+        <div class="settings-actions"><button type="button" id="s_test">Prova una notifica</button></div>
+      </div>
+    </details>
     <details>
       <summary><span class="dot" id="pwdot"></span><span id="pwlabel">Password di amministratore</span></summary>
       <form id="pwform" autocomplete="off">
@@ -259,6 +291,7 @@ const excluded = () => data.excluded || {};
 const isEx = i => i.key in excluded();
 function pending() { return data.items.filter(i => !i.updated); }
 let exOpen = false;
+let unOpen = false;
 
 function iconHtml(path, kind) {
   return path
@@ -291,6 +324,38 @@ function rowHtml(i, busy, ex) {
   </li>`;
 }
 
+function renderSettings() {
+  const st = data.settings;
+  if (!st) return;
+  const set = (id, prop, val) => { const el = $(id); if (document.activeElement !== el) el[prop] = val; };
+  set("#s_daily", "checked", st.daily_check);
+  set("#s_check_time", "value", st.check_time);
+  set("#s_auto", "checked", st.auto_update);
+  set("#s_auto_time", "value", st.auto_time);
+  set("#s_login", "checked", st.login);
+  const on = st.daily_check || st.auto_update;
+  $("#autodot").className = "dot" + (on && st.login ? " on" : "");
+  $("#autolabel").textContent = !on ? "Controllo automatico disattivato"
+    : st.auto_update ? `Aggiornamento automatico ogni notte alle ${st.auto_time}`
+    : `Controllo automatico ogni giorno alle ${st.check_time}`;
+  const hint = $("#loginhint");
+  hint.textContent = on && !st.login ? "Il controllo automatico funziona solo mentre Aggiornamenti è attivo: attiva l'avvio all'accesso perché resti attivo anche dopo un riavvio." : "";
+  hint.className = "hint" + (on && !st.login ? " warn" : "");
+  const la = st.last_auto;
+  $("#lastauto").textContent = la ? `Ultimo aggiornamento automatico: ${ago(la.at)} · ${la.updated.length} aggiornate${la.failed.length ? `, ${la.failed.length} non riuscite (${la.failed.join(", ")})` : ""}${la.postponed.length ? `, rimandate perché aperte: ${la.postponed.join(", ")}` : ""}` : "";
+}
+
+async function saveSettings(patch) {
+  try { data = await api("/api/settings", patch); } catch (e) { alert(e.message); }
+  render();
+}
+$("#s_daily").onchange = e => saveSettings({ daily_check: e.target.checked });
+$("#s_auto").onchange = e => saveSettings({ auto_update: e.target.checked });
+$("#s_login").onchange = e => saveSettings({ login: e.target.checked });
+$("#s_check_time").onchange = e => e.target.value && saveSettings({ check_time: e.target.value });
+$("#s_auto_time").onchange = e => e.target.value && saveSettings({ auto_time: e.target.value });
+$("#s_test").onclick = async () => { await api("/api/notify-test", {}); };
+
 function render() {
   const busy = data.scanning || data.running;
   const items = data.items;
@@ -318,10 +383,11 @@ function render() {
   $("#go").disabled = busy || n === 0;
   $("#go").textContent = n && n === todo.length && nMain === n ? "Aggiorna tutto" : n ? `Aggiorna (${n})` : "Aggiorna";
 
+  renderSettings();
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
   $("#pwlabel").textContent = data.password ? "Password di amministratore salvata" : "Password di amministratore non impostata";
 
-  const sig = JSON.stringify([busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), items.map(i => {
+  const sig = JSON.stringify([busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
     const j = data.jobs[i.id];
     return [i.id, i.updated, j?.status, openLogs.has(i.id) ? j?.log : ""];
   })]);
@@ -329,6 +395,9 @@ function render() {
   lastSig = sig;
 
   let html = "";
+  if (data.macos && data.macos.length) {
+    html += `<div class="notice"><div><div class="name">Aggiornamento di macOS disponibile</div><div class="meta">${data.macos.map(esc).join(" · ")}</div></div><button type="button" id="openSU">Apri Impostazioni</button></div>`;
+  }
   if (!main.length) {
     html = data.scanning ? "" : '<div class="empty"><strong>Tutto aggiornato</strong>Nessuna app ha bisogno di aggiornamenti.</div>';
   } else {
@@ -360,12 +429,32 @@ function render() {
     }
     html += "</ul></details>";
   }
+
+  // app che nessuna fonte sa controllare
+  const un = data.unchecked || [];
+  if (un.length && !data.scanning) {
+    html += `<details class="excluded unchecked" ${unOpen ? "open" : ""}>
+      <summary>Non controllate · ${un.length}</summary>
+      <p class="note">Per queste app non esiste una fonte di aggiornamento che il programma sappia leggere: non è detto che siano aggiornate. Controllale ogni tanto dal menu dell'app o dal sito dello sviluppatore.</p><ul>`;
+    for (const u of un) {
+      const q = encodeURIComponent(`${u.name} mac download`);
+      html += `<li><div class="row static">
+        <span></span>${iconHtml(u.path)}
+        <div style="min-width:0"><div class="name">${esc(u.name)}</div><div class="meta reason">${esc(u.version || "versione sconosciuta")} · ${esc(u.reason)}</div></div>
+        <div class="status"><a class="act link" href="https://duckduckgo.com/?q=${q}" target="_blank" rel="noopener">Cerca</a></div>
+      </div></li>`;
+    }
+    html += "</ul></details>";
+  }
   $("#list").innerHTML = html;
-  const det = $("#list details.excluded");
+  const unDet = $("#list details.unchecked");
+  if (unDet) unDet.addEventListener("toggle", () => { unOpen = unDet.open; });
+  const det = $("#list details.excluded:not(.unchecked)");
   if (det) det.addEventListener("toggle", () => { exOpen = det.open; });
 }
 
 $("#list").addEventListener("click", async e => {
+  if (e.target.id === "openSU") return api("/api/open-software-update", {});
   if (e.target.id === "all") {
     const main = pending().filter(i => !isEx(i));
     if (e.target.checked) main.forEach(i => selected.add(i.id)); else main.forEach(i => selected.delete(i.id));
