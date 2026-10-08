@@ -29,8 +29,10 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.6.0"   # tenere allineata con CHANGELOG.md
-HOST, PORT = "127.0.0.1", 8765
+VERSION = "1.7.0"   # tenere allineata con CHANGELOG.md
+# --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
+DEMO = "--demo" in sys.argv
+HOST, PORT = "127.0.0.1", 8766 if DEMO else 8765
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.expanduser("~/Library/Caches/AggiornamentiMac")
 CASK_API = "https://formulae.brew.sh/api/cask.json"
@@ -39,7 +41,8 @@ ASKPASS = os.path.join(ROOT, "askpass.sh")
 SPARKLE_NS = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
 APP_DIRS = ["/Applications", "/Applications/Utilities", os.path.expanduser("~/Applications")]
 
-SUPPORT = os.path.expanduser("~/Library/Application Support/AggiornamentiMac")
+SUPPORT = (tempfile.mkdtemp(prefix="aggiornamenti-demo-") if DEMO
+           else os.path.expanduser("~/Library/Application Support/AggiornamentiMac"))
 EXCLUDED_FILE = os.path.join(SUPPORT, "esclusi.json")
 SETTINGS_FILE = os.path.join(SUPPORT, "impostazioni.json")
 LAUNCH_LABEL = "com.aggiornamenti-mac"
@@ -63,6 +66,53 @@ ENV.update({
     "SUDO_ASKPASS": ASKPASS,
     "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 })
+
+def system_lang():
+    forced = os.environ.get("AGG_LANG")
+    if forced:
+        return "it" if forced.startswith("it") else "en"
+    try:
+        out = subprocess.run(["defaults", "read", "-g", "AppleLanguages"], capture_output=True,
+                             text=True, timeout=5).stdout
+        first = re.search(r'"?([a-zA-Z]{2})', out.split("(", 1)[-1])
+        return "it" if first and first.group(1).lower() == "it" else "en"
+    except Exception:
+        return "en"
+
+
+LANG = system_lang()
+
+# testi prodotti dal server (log, notifiche, errori); fasi, fonti e motivi viaggiano come codici
+MESSAGES = {
+    "available": ("{n} aggiornamento disponibile", "{n} aggiornamenti disponibili", "{n} update available", "{n} updates available"),
+    "upd_ok": ("{n} app aggiornata", "{n} app aggiornate", "{n} app updated", "{n} apps updated"),
+    "upd_fail": ("{n} non riuscita", "{n} non riuscite", "{n} failed", "{n} failed"),
+    "upd_postponed": ("{n} rimandata perché aperta", "{n} rimandate perché aperte", "{n} postponed (in use)", "{n} postponed (in use)"),
+    "freed": ("liberati {x}", "liberati {x}", "{x} freed", "{x} freed"),
+    "auto_title": ("Aggiornamento automatico",) * 2 + ("Automatic update",) * 2,
+    "test": ("Le notifiche funzionano. Un clic qui apre la pagina.",) * 2 + ("Notifications work. Click here to open the page.",) * 2,
+    "pkg_unsigned": ("Pacchetto senza firma Developer ID valida: annullato per sicurezza",) * 2 + ("Package lacks a valid Developer ID signature: cancelled for safety",) * 2,
+    "pkg_team": ("Pacchetto firmato da {a} invece di {b}: annullato per sicurezza",) * 2 + ("Package signed by {a} instead of {b}: cancelled for safety",) * 2,
+    "need_pw_pkg": ("Questo aggiornamento è un pacchetto di installazione e serve la password di amministratore: impostala in basso nella pagina.",) * 2
+                   + ("This update is an installer package and needs the administrator password: set it at the bottom of the page.",) * 2,
+    "need_pw": ("Serve la password di amministratore: impostala in basso nella pagina.",) * 2 + ("The administrator password is required: set it at the bottom of the page.",) * 2,
+    "downloading": ("Scarico {x}",) * 2 + ("Downloading {x}",) * 2,
+    "bad_format": ("Formato non gestito: {x}",) * 2 + ("Unsupported format: {x}",) * 2,
+    "no_app": ("Nessuna app né pacchetto di installazione trovati nell'archivio",) * 2 + ("No app or installer package found in the archive",) * 2,
+    "team_diff": ("Firma diversa ({a} invece di {b}): annullato per sicurezza",) * 2 + ("Different signature ({a} instead of {b}): cancelled for safety",) * 2,
+    "bad_sig": ("Firma non valida: {x}",) * 2 + ("Invalid signature: {x}",) * 2,
+    "closing": ("Chiudo {x}",) * 2 + ("Quitting {x}",) * 2,
+    "busy": ("Attendi la fine dell'operazione in corso",) * 2 + ("Wait for the current operation to finish",) * 2,
+    "bad_pw": ("Password non corretta",) * 2 + ("Wrong password",) * 2,
+}
+
+
+def t(key, n=1, **kw):
+    """Messaggio nella lingua del Mac; n sceglie singolare o plurale."""
+    forms = MESSAGES[key]
+    text = forms[(0 if LANG == "it" else 2) + (0 if n == 1 else 1)]
+    return text.format(n=n, **kw)
+
 
 lock = threading.Lock()
 state = {
@@ -138,6 +188,8 @@ def login_enabled():
 
 def set_login(enabled):
     """Avvio all'accesso tramite LaunchAgent dell'utente."""
+    if DEMO:
+        return
     domain = f"gui/{os.getuid()}"
     if not enabled:
         run(["launchctl", "bootout", f"{domain}/{LAUNCH_LABEL}"], timeout=30)
@@ -147,7 +199,9 @@ def set_login(enabled):
     log_path = os.path.expanduser("~/Library/Logs/AggiornamentiMac.log")
     plist = {
         "Label": LAUNCH_LABEL,
-        "ProgramArguments": [sys.executable, os.path.join(ROOT, "server.py")],
+        # percorsi stabili: il python di Homebrew cambia cartella a ogni aggiornamento
+        "ProgramArguments": [shutil.which("python3", path=ENV["PATH"]) or "/usr/bin/python3",
+                             os.path.join(ROOT, "server.py")],
         "RunAtLoad": True,
         # riavvia solo se il server cade; se la porta è già occupata esce con 0 e si ferma
         "KeepAlive": {"SuccessfulExit": False},
@@ -162,6 +216,9 @@ def set_login(enabled):
 
 
 def notify(title, message):
+    if DEMO:
+        print("notifica:", title, "-", message, flush=True)
+        return
     tn = shutil.which("terminal-notifier", path=ENV["PATH"])
     if tn:
         run([tn, "-title", title, "-message", message, "-open", PAGE_URL,
@@ -175,10 +232,6 @@ def visible_pending():
     excluded = load_excluded()
     with lock:
         return [i for i in state["items"] if not i.get("updated") and i.get("key") not in excluded]
-
-
-def plural(n, one, many):
-    return f"{n} {one if n == 1 else many}"
 
 
 def start_scan_sync():
@@ -204,7 +257,7 @@ def scheduled_check():
     todo = visible_pending()
     if todo:
         names = ", ".join(i["name"] for i in todo[:3]) + ("…" if len(todo) > 3 else "")
-        notify(plural(len(todo), "aggiornamento disponibile", "aggiornamenti disponibili"), names)
+        notify(t("available", len(todo)), names)
 
 
 def auto_update():
@@ -232,15 +285,15 @@ def auto_update():
     if updated or failed or postponed:
         parts = []
         if updated:
-            parts.append(plural(len(updated), "app aggiornata", "app aggiornate"))
+            parts.append(t("upd_ok", len(updated)))
         if failed:
-            parts.append(plural(len(failed), "non riuscita", "non riuscite"))
+            parts.append(t("upd_fail", len(failed)))
         if postponed:
-            parts.append(plural(len(postponed), "rimandata perché aperta", "rimandate perché aperte"))
+            parts.append(t("upd_postponed", len(postponed)))
         lc = load_settings().get("last_cleanup") or {}
         if ids and lc.get("freed"):
-            parts.append(f"liberati {human(lc['freed'])}")
-        notify("Aggiornamento automatico", ", ".join(parts))
+            parts.append(t("freed", x=human(lc["freed"])))
+        notify(t("auto_title"), ", ".join(parts))
 
 
 def due(hhmm, last_day, now):
@@ -324,10 +377,10 @@ def remote_size(url):
 
 # fasi riconosciute nell'output di brew e mas: (espressione, fase, percentuale minima)
 PHASES = [
-    (r"==> (Fetching|Downloading)|Bottle Manifest|Downloading ", "Download", 3),
-    (r"==> (Installing|Pouring|Upgrading)|Moving App|Moving Generic|Running installer|Installing ", "Installazione", 75),
-    (r"Removing App|Backing App|Uninstalling|overwriting|Purging", "Sostituzione della versione precedente", 85),
-    (r"==> (Linking|Caveats|Summary)|successfully|Upgraded|Installed ", "Rifinitura", 95),
+    (r"==> (Fetching|Downloading)|Bottle Manifest|Downloading ", "download", 3),
+    (r"==> (Installing|Pouring|Upgrading)|Moving App|Moving Generic|Running installer|Installing ", "install", 75),
+    (r"Removing App|Backing App|Uninstalling|overwriting|Purging", "replace", 85),
+    (r"==> (Linking|Caveats|Summary)|successfully|Upgraded|Installed ", "finish", 95),
 ]
 
 
@@ -355,12 +408,12 @@ def brew_progress(jid, total=None):
     """Segue le righe di brew e il file in download nella cache di Homebrew."""
     start = time.time()
     stop = threading.Event()
-    cur = {"phase": "Preparazione", "floor": 1}
+    cur = {"phase": "prepare", "floor": 1}
     downloads = os.path.join(BREW_CACHE, "downloads")
 
     def watch():
         while not stop.wait(0.5):
-            if cur["phase"] != "Download":
+            if cur["phase"] != "download":
                 continue
             newest = None
             for f in glob.glob(os.path.join(downloads, "*.incomplete")):
@@ -387,10 +440,10 @@ def brew_progress(jid, total=None):
             if re.search(rx, line):
                 if floor >= cur["floor"]:
                     cur.update(phase=phase, floor=floor)
-                    set_progress(jid, phase=phase, pct=floor if phase != "Download" else None,
+                    set_progress(jid, phase=phase, pct=floor if phase != "download" else None,
                                  bytes=None, total=None)
                 break
-        if m and cur["phase"] == "Download" and float(m.group(1)) <= 100:
+        if m and cur["phase"] == "download" and float(m.group(1)) <= 100:
             set_progress(jid, pct=round(3 + 0.67 * float(m.group(1)), 1))
 
     threading.Thread(target=watch, daemon=True).start()
@@ -414,6 +467,8 @@ def is_major(candidate, installed):
 
 
 def has_password():
+    if DEMO:
+        return True
     rc, _ = run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE], timeout=10)
     return rc == 0
 
@@ -516,7 +571,7 @@ def scan_brew():
         items.append({
             "id": "cask:" + c["name"], "kind": "cask", "token": c["name"],
             "name": c["name"], "installed": ", ".join(c["installed_versions"]),
-            "latest": c["current_version"], "source": "Homebrew",
+            "latest": c["current_version"], "source": "homebrew",
         })
     for f in data.get("formulae", []):
         if f.get("pinned"):
@@ -524,7 +579,7 @@ def scan_brew():
         items.append({
             "id": "formula:" + f["name"], "kind": "formula", "token": f["name"],
             "name": f["name"], "installed": ", ".join(f["installed_versions"]),
-            "latest": f["current_version"], "source": "Riga di comando",
+            "latest": f["current_version"], "source": "cli",
         })
     return items, managed
 
@@ -540,7 +595,7 @@ def scan_mas():
             items.append({
                 "id": "mas:" + m.group(1), "kind": "mas", "token": m.group(1),
                 "name": m.group(2), "installed": m.group(3), "latest": m.group(4),
-                "source": "App Store",
+                "source": "appstore",
             })
     return items
 
@@ -586,17 +641,17 @@ def scan_apps(managed_casks):
                 if a["feed"] and str(a["feed"]).startswith("https://"):
                     sparkle.append(a)
                 else:
-                    skip(a, "Il catalogo Homebrew non indica il numero di versione")
+                    skip(a, "no_catalog_version")
                 continue
             current = installed_for_compare(latest, a)
             if not current or not vparts(current):
-                skip(a, "L'app non dichiara la sua versione")
+                skip(a, "no_app_version")
                 continue
             if newer(latest, current):
                 items.append({
                     "id": "adopt:" + cask["token"], "kind": "adopt", "token": cask["token"],
                     "name": a["name"], "installed": current, "latest": latest,
-                    "source": "Homebrew", "path": a["path"], "bundle_id": a["bundle_id"],
+                    "source": "homebrew", "path": a["path"], "bundle_id": a["bundle_id"],
                     "major": is_major(latest, current),
                     # il bundle id compare nella definizione della cask: abbinamento affidabile
                     "verified": bool(a["bundle_id"]) and a["bundle_id"].lower() in json.dumps(cask).lower(),
@@ -605,24 +660,24 @@ def scan_apps(managed_casks):
         if a["feed"] and str(a["feed"]).startswith("https://"):
             sparkle.append(a)
         elif a["feed"]:
-            skip(a, "Canale di aggiornamento non sicuro (http)")
+            skip(a, "insecure_feed")
         else:
-            skip(a, "Nessuna fonte di aggiornamento conosciuta")
+            skip(a, "no_source")
 
     def check(a):
         try:
             best = sparkle_latest(a["feed"])
         except Exception:
-            skip(a, "Il sito dello sviluppatore non ha risposto")
+            skip(a, "feed_down")
             return None
         if not best:
-            skip(a, "Il canale di aggiornamento non contiene versioni leggibili")
+            skip(a, "feed_empty")
             return None
         if best and newer(best["build"], a["build"]):
             return {
                 "id": "sparkle:" + a["bundle_id"], "kind": "sparkle", "token": a["bundle_id"],
                 "name": a["name"], "installed": a["version"], "latest": best["short"],
-                "source": "Sito dello sviluppatore", "path": a["path"], "bundle_id": a["bundle_id"],
+                "source": "developer", "path": a["path"], "bundle_id": a["bundle_id"],
                 "url": best["url"], "major": is_major(best["short"], a["version"]),
             }
         return None
@@ -679,7 +734,57 @@ def scan_macos():
     return [m.group(1).strip() for m in re.finditer(r"Title:\s*([^,]+(?:, Version: [^,]+)?)", out)]
 
 
+DEMO_ITEMS = [
+    # (nome, installata, nuova, fonte, tipo, maggiore)
+    ("Visual Studio Code", "1.104.2", "1.105.0", "homebrew", "adopt", False),
+    ("Google Chrome", "140.0.7339.80", "141.0.7390.54", "homebrew", "cask", False),
+    ("Spotify", "1.2.72.438", "1.2.74.477", "homebrew", "adopt", False),
+    ("Obsidian", "1.9.12", "1.9.14", "homebrew", "cask", False),
+    ("VLC", "3.0.21", "3.0.22", "developer", "sparkle", False),
+    ("Blender", "4.5.3", "5.0.0", "homebrew", "adopt", True),
+    ("Keynote", "14.3", "14.4", "appstore", "mas", False),
+    ("node", "24.8.0", "24.9.0", "cli", "formula", False),
+    ("ffmpeg", "8.0", "8.0.1", "cli", "formula", False),
+]
+DEMO_UNCHECKED = [("Elgato Stream Deck", "6.8.1", "no_source"), ("Logi Options+", "1.92", "no_source"),
+                  ("Luminar Neo", "1.24.0", "insecure_feed")]
+
+
+def demo_scan():
+    time.sleep(2.5)
+    items = []
+    for name, cur, new, source, kind, major in DEMO_ITEMS:
+        token = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        path = f"/Applications/{name}.app"
+        items.append({"id": f"{kind}:{token}", "kind": kind, "token": token, "name": name,
+                      "installed": cur, "latest": new, "source": source, "major": major,
+                      "path": path if os.path.exists(path) else None, "key": f"{kind}:{token}"})
+    with lock:
+        state["items"] = items
+        state["unchecked"] = [{"name": n, "version": v, "reason": r, "path": None} for n, v, r in DEMO_UNCHECKED]
+        state["macos"] = []
+        state["scanning"] = False
+        state["scanned_at"] = time.time()
+
+
+def demo_update(item):
+    jid, total = item["id"], 180 * 1048576
+    steps = 40
+    for i in range(1, steps + 1):
+        got = total * i // steps
+        set_progress(jid, phase="download", bytes=got, total=total, pct=round(3 + 67 * got / total, 1))
+        time.sleep(0.12)
+    for phase, pct in (("install", 75), ("replace", 85), ("finish", 95)):
+        set_progress(jid, phase=phase, pct=pct, bytes=None, total=None)
+        time.sleep(0.7)
+    with lock:
+        state["jobs"][jid]["status"] = "done"
+        state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
+
+
 def do_scan():
+    if DEMO:
+        return demo_scan()
     _by_token.clear()
     try:
         run([BREW, "update", "--quiet"], timeout=300, env={**ENV, "HOMEBREW_NO_AUTO_UPDATE": ""})
@@ -737,19 +842,19 @@ def team_id(app):
 
 def install_pkg(pkg, old_team, jid, log):
     """Installa un .pkg solo se firmato da Apple Developer ID dello stesso sviluppatore dell'app."""
-    set_progress(jid, phase="Verifica della firma", pct=76)
+    set_progress(jid, phase="verify", pct=76)
     rc, out = run(["pkgutil", "--check-signature", pkg], timeout=120)
     m = re.search(r"Developer ID Installer: .*\((\w+)\)", out)
     if rc != 0 or not m:
-        log("Pacchetto senza firma Developer ID valida: annullato per sicurezza\n" + out)
+        log(t("pkg_unsigned") + "\n" + out)
         return False
     if old_team and m.group(1) != old_team:
-        log(f"Pacchetto firmato da {m.group(1)} invece di {old_team}: annullato per sicurezza")
+        log(t("pkg_team", a=m.group(1), b=old_team))
         return False
     if not has_password():
-        log("Questo aggiornamento è un pacchetto di installazione e serve la password di amministratore: impostala in basso nella pagina.")
+        log(t("need_pw_pkg"))
         return False
-    set_progress(jid, phase="Installazione", pct=82)
+    set_progress(jid, phase="install", pct=82)
     rc, out = run(["sudo", "-A", "installer", "-pkg", pkg, "-target", "/"])
     log(out)
     return rc == 0
@@ -762,19 +867,19 @@ def install_sparkle(item, log):
     try:
         fname = os.path.basename(urlparse(url).path) or "download"
         archive = os.path.join(work, fname)
-        log(f"Scarico {url}")
+        log(t("downloading", x=url))
         req = urllib.request.Request(url, headers={"User-Agent": "AggiornamentiMac"})
         with urllib.request.urlopen(req, timeout=600) as r, open(archive, "wb") as f:
             total = int(r.headers.get("Content-Length") or 0) or None
             got, last = 0, 0
-            set_progress(jid, phase="Download", pct=None if not total else 3, bytes=0, total=total)
+            set_progress(jid, phase="download", pct=None if not total else 3, bytes=0, total=total)
             while chunk := r.read(256 * 1024):
                 f.write(chunk)
                 got += len(chunk)
                 if time.time() - last > 0.3:
                     last = time.time()
                     set_progress(jid, bytes=got, pct=round(3 + 67 * got / total, 1) if total else None)
-        set_progress(jid, phase="Apertura del pacchetto", pct=72, bytes=None, total=None)
+        set_progress(jid, phase="unpack", pct=72, bytes=None, total=None)
         lower = fname.lower()
         new_app, mount = None, None
         if lower.endswith((".pkg", ".mpkg")):
@@ -796,7 +901,7 @@ def install_sparkle(item, log):
                 return False
             search = out_dir
         else:
-            log("Formato non gestito: " + fname)
+            log(t("bad_format", x=fname))
             return False
         try:
             target = os.path.basename(dest)
@@ -807,18 +912,18 @@ def install_sparkle(item, log):
                 pkgs = glob.glob(os.path.join(search, "*.pkg")) + glob.glob(os.path.join(search, "*", "*.pkg"))
                 if pkgs:
                     return install_pkg(pkgs[0], old_team, jid, log)
-                log("Nessuna app né pacchetto di installazione trovati nell'archivio")
+                log(t("no_app"))
                 return False
-            set_progress(jid, phase="Verifica della firma", pct=78)
+            set_progress(jid, phase="verify", pct=78)
             new_team = team_id(new_app)
             if old_team and new_team != old_team:
-                log(f"Firma diversa ({new_team} invece di {old_team}): annullato per sicurezza")
+                log(t("team_diff", a=new_team, b=old_team))
                 return False
             rc, out = run(["codesign", "--verify", "--deep", "--strict", new_app], timeout=300)
             if rc != 0:
-                log("Firma non valida: " + out)
+                log(t("bad_sig", x=out))
                 return False
-            set_progress(jid, phase="Installazione", pct=88)
+            set_progress(jid, phase="install", pct=88)
             staged = os.path.join(work, "staged.app")
             run(["ditto", new_app, staged])
             backup = os.path.join(work, "old.app")
@@ -838,6 +943,8 @@ def install_sparkle(item, log):
 
 
 def update_one(item):
+    if DEMO:
+        return demo_update(item)
     jid = item["id"]
     lines = []
 
@@ -851,8 +958,8 @@ def update_one(item):
     bid = item.get("bundle_id")
     was_running = item["kind"] in ("cask", "adopt", "sparkle") and running_app(bid)
     if was_running:
-        set_progress(jid, phase=f"Chiusura di {item['name']}", pct=1)
-        log(f"Chiudo {item['name']}")
+        set_progress(jid, phase="closing", pct=1)
+        log(t("closing", x=item["name"]))
         quit_app(bid)
 
     kind, token = item["kind"], item["token"]
@@ -880,15 +987,15 @@ def update_one(item):
         log(str(e))
 
     if was_running and bid:
-        set_progress(jid, phase=f"Riapertura di {item['name']}", pct=98)
+        set_progress(jid, phase="reopening", pct=98)
         run(["open", "-g", "-b", bid], timeout=30)
 
     if not ok and "sudo" in "\n".join(lines).lower() and not has_password():
-        log("Serve la password di amministratore: impostala in basso nella pagina.")
+        log(t("need_pw"))
     with lock:
         state["jobs"][jid]["status"] = "done" if ok else "error"
         if ok:
-            state["items"] = [i for i in state["items"] if i["id"] != jid] + [{**item, "updated": True}]
+            state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
 
 
 def human(n):
@@ -900,6 +1007,11 @@ def human(n):
 
 def cleanup():
     """Cancella installer scaricati, vecchie versioni e file temporanei. Restituisce i byte liberati."""
+    if DEMO:
+        s = load_settings()
+        s["last_cleanup"] = {"at": time.time(), "freed": int(1.8 * 1024 ** 3)}
+        save_settings(s)
+        return s["last_cleanup"]["freed"]
     with lock:
         state["cleaning"] = True
     freed = 0
@@ -940,7 +1052,7 @@ def do_updates(ids):
         state["batch"] = {"total": len(todo), "done": 0}
     for item in todo:
         with lock:
-            state["jobs"][item["id"]].update(status="running", phase="Preparazione", pct=0)
+            state["jobs"][item["id"]].update(status="running", phase="prepare", pct=0)
         update_one(item)
         with lock:
             state["batch"]["done"] += 1
@@ -1000,7 +1112,7 @@ class Handler(BaseHTTPRequestHandler):
                 "scan_error": state["scan_error"], "items": state["items"],
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
                 "cleaning": state["cleaning"],
-                "version": VERSION,
+                "version": VERSION, "lang": LANG, "demo": DEMO,
                 "password": has_password(),
                 "excluded": load_excluded(),
                 "unchecked": state["unchecked"], "macos": state["macos"],
@@ -1008,7 +1120,13 @@ class Handler(BaseHTTPRequestHandler):
                              "notifier": bool(shutil.which("terminal-notifier", path=ENV["PATH"]))},
             }
 
+    def host_ok(self):
+        # difesa dal DNS rebinding: si risponde solo a chi ci chiama col nostro nome
+        return self.headers.get("Host") in (f"{HOST}:{PORT}", f"localhost:{PORT}")
+
     def do_GET(self):
+        if not self.host_ok():
+            return self.send(403, {"error": "forbidden"})
         u = urlparse(self.path)
         if u.path == "/":
             with open(os.path.join(ROOT, "index.html"), "rb") as f:
@@ -1025,6 +1143,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self.host_ok():
+            return self.send(403, {"error": "forbidden"})
         # solo richieste dalla pagina stessa
         origin = self.headers.get("Origin")
         if origin and origin not in (f"http://{HOST}:{PORT}", f"http://localhost:{PORT}"):
@@ -1073,7 +1193,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/cleanup":
             with lock:
                 if state["running"] or state["scanning"] or state["cleaning"]:
-                    return self.send(409, {"error": "Attendi la fine dell'operazione in corso"})
+                    return self.send(409, {"error": t("busy")})
                 state["running"] = True
             def job():
                 try:
@@ -1084,7 +1204,7 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=job, daemon=True).start()
             return self.send(200, self.snapshot())
         if u.path == "/api/notify-test":
-            notify("Aggiornamenti", "Le notifiche funzionano. Un clic qui apre la pagina.")
+            notify("Aggiornamenti", t("test"))
             return self.send(200, self.snapshot())
         if u.path == "/api/open-software-update":
             run(["open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"], timeout=15)
@@ -1115,7 +1235,7 @@ class Handler(BaseHTTPRequestHandler):
             p = subprocess.run(["sudo", "-S", "-k", "-p", "", "true"], input=pw + "\n",
                                capture_output=True, text=True, timeout=20)
             if p.returncode != 0:
-                return self.send(400, {"error": "Password non corretta"})
+                return self.send(400, {"error": t("bad_pw")})
             # via stdin, così la password non compare nella lista dei processi
             esc = pw.replace("\\", "\\\\").replace('"', '\\"')
             cmd = (f'add-generic-password -U -s {KEYCHAIN_SERVICE} '
@@ -1126,7 +1246,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    os.chmod(ASKPASS, 0o755)
+    if not os.access(ASKPASS, os.X_OK):
+        os.chmod(ASKPASS, 0o755)
     with lock:
         state["scanning"] = True
     try:

@@ -2,6 +2,26 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.7.0] - 2026-10-08
+
+### Aggiunto
+- Installazione con un comando tramite tap Homebrew: `brew install giuseppelupo1979/tap/aggiornamenti`.
+- Comando `aggiornamenti` con le azioni `open`, `start`, `stop`, `demo`, `app` e `version`; l'app sulla Scrivania e `Aggiornamenti.command` passano da lì.
+- Modalità demo (`aggiornamenti demo`, porta 8766): app di esempio e aggiornamenti simulati, cartelle temporanee, nessuna modifica al sistema.
+- Interfaccia e notifiche in inglese o italiano secondo la lingua del Mac (forzabile con `?lang=en` o `?lang=it`).
+- README in inglese con GIF e screenshot, `LEGGIMI.md` in italiano, licenza MIT.
+
+### Migliorato
+- Un'app aggiornata resta al suo posto nell'elenco con la scritta "Aggiornata" invece di spostarsi in fondo.
+- L'avvio all'accesso usa percorsi stabili di Python e del programma, che non cambiano quando Homebrew si aggiorna.
+- Funziona anche con il Python 3.9 di sistema di macOS.
+
+### Corretto
+- L'avviso degli aggiornamenti di macOS veniva cancellato subito dopo essere stato disegnato e non compariva mai.
+
+### Sicurezza
+- Il server risponde solo a richieste indirizzate a `127.0.0.1` o `localhost` (controllo dell'header `Host`), per difendersi dal DNS rebinding.
+
 ## [1.6.0] - 2026-10-06
 
 ### Aggiunto

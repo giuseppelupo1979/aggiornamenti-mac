@@ -4,9 +4,11 @@ Aggiornamenti è una piccola pagina web che gira solo sul tuo Mac. Controlla tut
 
 ## Aprire il programma
 
-Fai doppio clic sull'app **Aggiornamenti** sulla Scrivania (oppure su **Aggiornamenti.command** nella cartella del progetto). Si apre il browser all'indirizzo `http://127.0.0.1:8765` e parte subito un controllo. La prima volta macOS potrebbe chiederti conferma per aprire un file scaricato: clic destro sul file, poi **Apri**.
+Fai doppio clic sull'app **Aggiornamenti** sulla Scrivania, oppure scrivi `aggiornamenti` nel Terminale. Si apre il browser all'indirizzo `http://127.0.0.1:8765` e parte subito un controllo. Se l'app sulla Scrivania non c'è, la crea il comando `aggiornamenti app`. La prima volta macOS potrebbe chiederti conferma per aprirla: clic destro, poi **Apri**.
 
-Se il programma è già attivo, il doppio clic apre solo la pagina. Puoi anche tenerla tra i preferiti del browser.
+Se il programma è già attivo, viene aperta solo la pagina. Puoi anche tenerla tra i preferiti del browser.
+
+La pagina è in italiano o in inglese secondo la lingua del Mac. Per provare il programma senza toccare nulla c'è `aggiornamenti demo`: mostra app di esempio e simula gli aggiornamenti, senza modificare il sistema.
 
 ## Leggere l'elenco
 
@@ -110,10 +112,10 @@ Senza password tutto il resto funziona lo stesso: solo gli aggiornamenti che la 
 
 ## Chiudere il programma
 
-Il server resta attivo in background finché non riavvii il Mac (o sempre, se hai scelto l'avvio automatico con `installa.sh`). Per fermarlo:
+Il server resta attivo in background finché non riavvii il Mac, oppure sempre se hai attivato l'avvio all'accesso. Per fermarlo:
 
 ```bash
-kill $(lsof -tiTCP:8765 -sTCP:LISTEN)
+aggiornamenti stop
 ```
 
 Il registro degli eventi è in `~/Library/Logs/AggiornamentiMac.log`.

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -172,12 +172,12 @@
 <main>
   <header>
     <div>
-      <h1>Aggiornamenti</h1>
-      <p class="sub" id="sub">Controllo in corso…</p>
+      <h1 data-t="title"></h1>
+      <p class="sub" id="sub"></p>
     </div>
     <div class="actions">
-      <button id="scan">Controlla</button>
-      <button id="go" class="primary" disabled>Aggiorna</button>
+      <button id="scan" data-t="check"></button>
+      <button id="go" class="primary" disabled></button>
     </div>
   </header>
 
@@ -186,27 +186,26 @@
 
   <footer>
     <details id="settings">
-      <summary><span class="dot" id="autodot"></span><span id="autolabel">Controllo automatico</span></summary>
+      <summary><span class="dot" id="autodot"></span><span id="autolabel"></span></summary>
       <div class="settings">
-        <label class="opt"><input type="checkbox" id="s_daily"> <span>Controlla ogni giorno alle <input type="time" id="s_check_time"> e avvisami con una notifica</span></label>
-        <label class="opt"><input type="checkbox" id="s_auto"> <span>Aggiorna da solo ogni notte alle <input type="time" id="s_auto_time"></span></label>
-        <p class="hint">Di notte vengono aggiornate solo le app non escluse, senza versioni maggiori né abbinamenti da verificare. Le app aperte non vengono mai chiuse: si rimandano al giro successivo. Se il Mac dorme all'ora prevista, il controllo parte appena si risveglia.</p>
-        <label class="opt"><input type="checkbox" id="s_login"> <span>Avvia Aggiornamenti all'accesso</span></label>
+        <label class="opt"><input type="checkbox" id="s_daily"> <span><span data-t="dailyA"></span> <input type="time" id="s_check_time"> <span data-t="dailyB"></span></span></label>
+        <label class="opt"><input type="checkbox" id="s_auto"> <span><span data-t="nightly"></span> <input type="time" id="s_auto_time"></span></label>
+        <p class="hint" data-t="nightlyHint"></p>
+        <label class="opt"><input type="checkbox" id="s_login"> <span data-t="login"></span></label>
         <p class="hint" id="loginhint"></p>
         <p class="hint" id="lastauto"></p>
-        <div class="settings-actions"><button type="button" id="s_test">Prova una notifica</button> <button type="button" id="s_clean">Libera spazio ora</button></div>
+        <div class="settings-actions"><button type="button" id="s_test" data-t="testNotif"></button> <button type="button" id="s_clean" data-t="cleanNow"></button></div>
         <p class="hint" id="lastclean"></p>
       </div>
     </details>
     <details>
-      <summary><span class="dot" id="pwdot"></span><span id="pwlabel">Password di amministratore</span></summary>
+      <summary><span class="dot" id="pwdot"></span><span id="pwlabel"></span></summary>
       <form id="pwform" autocomplete="off">
-        <input type="password" id="pw" placeholder="Password del Mac">
-        <button type="submit">Salva</button>
-        <button type="button" id="pwdel">Rimuovi</button>
+        <input type="password" id="pw">
+        <button type="submit" data-t="save"></button>
+        <button type="button" id="pwdel" data-t="remove"></button>
       </form>
-      <p>Alcuni aggiornamenti (App Store e programmi con installer) richiedono i privilegi di amministratore.
-      La password viene salvata solo nel Portachiavi di questo Mac e serve a completarli senza chiedere nulla.</p>
+      <p data-t="pwHelp"></p>
       <p id="pwmsg"></p>
     </details>
     <p class="version" id="version"></p>
@@ -220,6 +219,101 @@ const selected = new Set();
 const openLogs = new Set();
 let firstLoad = true;
 
+// ---------------------------------------------------------------- lingue
+
+const I18N = {
+  it: {
+    title: "Aggiornamenti", check: "Controlla", update: "Aggiorna", updateAll: "Aggiorna tutto", updateN: n => `Aggiorna (${n})`,
+    scanning: "Controllo in corso…", cleaning: "Pulizia della cache…", updating: "Aggiornamento in corso…", error: "Errore: ",
+    allUpToDate: "Tutto aggiornato", noneNeeded: "Nessuna app ha bisogno di aggiornamenti.",
+    available: n => n === 1 ? "1 aggiornamento disponibile" : `${n} aggiornamenti disponibili`,
+    now: "adesso", minAgo: n => `${n} min fa`, of: "di",
+    selectAll: "Seleziona tutto", apps: "Applicazioni", cli: "Strumenti da riga di comando",
+    done: "Aggiornata", failed: "Non riuscito", queued: "In coda", inProgress: "In corso",
+    exclude: "Escludi", include: "Includi", major: "versione maggiore", unverified: "da verificare",
+    phases: { prepare: "Preparazione", download: "Download", unpack: "Apertura del pacchetto", verify: "Verifica della firma",
+              install: "Installazione", replace: "Sostituzione della versione precedente", finish: "Rifinitura",
+              closing: "Chiusura dell'app", reopening: "Riapertura dell'app" },
+    sources: { homebrew: "Homebrew", cli: "Riga di comando", appstore: "App Store", developer: "Sito dello sviluppatore" },
+    reasons: { no_catalog_version: "Il catalogo Homebrew non indica il numero di versione", no_app_version: "L'app non dichiara la sua versione",
+               insecure_feed: "Canale di aggiornamento non sicuro (http)", no_source: "Nessuna fonte di aggiornamento conosciuta",
+               feed_down: "Il sito dello sviluppatore non ha risposto", feed_empty: "Il canale di aggiornamento non contiene versioni leggibili" },
+    macos: "Aggiornamento di macOS disponibile", openSettings: "Apri Impostazioni",
+    excluded: "Escluse", withUpdate: n => `(${n} con aggiornamento)`,
+    excludedNote: "Queste app non compaiono nell'elenco principale e non vengono mai selezionate in automatico. Puoi comunque aggiornarle da qui quando serve.",
+    noUpdate: "Nessun aggiornamento",
+    unchecked: "Non controllate",
+    uncheckedNote: "Per queste app non esiste una fonte di aggiornamento che il programma sappia leggere: non è detto che siano aggiornate. Controllale ogni tanto dal menu dell'app o dal sito dello sviluppatore.",
+    unknownVersion: "versione sconosciuta", search: "Cerca",
+    dailyA: "Controlla ogni giorno alle", dailyB: "e avvisami con una notifica", nightly: "Aggiorna da solo ogni notte alle",
+    nightlyHint: "Di notte vengono aggiornate solo le app non escluse, senza versioni maggiori né abbinamenti da verificare. Le app aperte non vengono mai chiuse: si rimandano al giro successivo. Se il Mac dorme all'ora prevista, il controllo parte appena si risveglia.",
+    login: "Avvia Aggiornamenti all'accesso", testNotif: "Prova una notifica", cleanNow: "Libera spazio ora",
+    autoOff: "Controllo automatico disattivato", autoNightly: t => `Aggiornamento automatico ogni notte alle ${t}`, autoDaily: t => `Controllo automatico ogni giorno alle ${t}`,
+    loginWarn: "Il controllo automatico funziona solo mentre Aggiornamenti è attivo: attiva l'avvio all'accesso perché resti attivo anche dopo un riavvio.",
+    cleanInfo: "Dopo ogni giro di aggiornamenti installer e vecchie versioni vengono cancellati.",
+    cleanLast: (a, x) => `Ultima pulizia: ${a}, liberati ${x}.`, cleanRunning: "Pulizia in corso…",
+    lastAuto: (a, n) => `Ultimo aggiornamento automatico: ${a} · ${n} aggiornate`,
+    lastAutoFailed: (n, l) => `, ${n} non riuscite (${l})`, lastAutoPostponed: l => `, rimandate perché aperte: ${l}`,
+    pwSet: "Password di amministratore salvata", pwUnset: "Password di amministratore non impostata",
+    pwPlaceholder: "Password del Mac", save: "Salva", remove: "Rimuovi",
+    pwHelp: "Alcuni aggiornamenti (App Store e programmi con installer) richiedono i privilegi di amministratore. La password viene salvata solo nel Portachiavi di questo Mac e serve a completarli senza chiedere nulla.",
+    pwChecking: "Verifica…", pwSaved: "Salvata nel Portachiavi.", pwRemoved: "Rimossa.",
+    version: "Versione", news: "Novità", demo: "Modalità demo: nessuna modifica al sistema",
+  },
+  en: {
+    title: "Aggiornamenti", check: "Check", update: "Update", updateAll: "Update all", updateN: n => `Update (${n})`,
+    scanning: "Checking…", cleaning: "Cleaning the cache…", updating: "Updating…", error: "Error: ",
+    allUpToDate: "Everything is up to date", noneNeeded: "No app needs updating.",
+    available: n => n === 1 ? "1 update available" : `${n} updates available`,
+    now: "just now", minAgo: n => `${n} min ago`, of: "of",
+    selectAll: "Select all", apps: "Applications", cli: "Command-line tools",
+    done: "Updated", failed: "Failed", queued: "Queued", inProgress: "In progress",
+    exclude: "Exclude", include: "Include", major: "major version", unverified: "unverified",
+    phases: { prepare: "Preparing", download: "Downloading", unpack: "Opening the package", verify: "Checking the signature",
+              install: "Installing", replace: "Replacing the previous version", finish: "Finishing",
+              closing: "Quitting the app", reopening: "Reopening the app" },
+    sources: { homebrew: "Homebrew", cli: "Command line", appstore: "App Store", developer: "Developer website" },
+    reasons: { no_catalog_version: "The Homebrew catalog has no version number", no_app_version: "The app does not declare its version",
+               insecure_feed: "Insecure update feed (http)", no_source: "No known update source",
+               feed_down: "The developer's website did not respond", feed_empty: "The update feed has no readable versions" },
+    macos: "macOS update available", openSettings: "Open Settings",
+    excluded: "Excluded", withUpdate: n => `(${n} with an update)`,
+    excludedNote: "These apps are hidden from the main list and never selected automatically. You can still update them from here when you need to.",
+    noUpdate: "No update",
+    unchecked: "Not checked",
+    uncheckedNote: "There is no update source the program can read for these apps, so they may be out of date. Check them now and then from the app's menu or the developer's website.",
+    unknownVersion: "unknown version", search: "Search",
+    dailyA: "Check every day at", dailyB: "and notify me", nightly: "Update automatically every night at",
+    nightlyHint: "At night only apps that are not excluded are updated, skipping major versions and unverified matches. Open apps are never quit: they wait for the next run. If the Mac is asleep at that time, the check runs as soon as it wakes up.",
+    login: "Start Aggiornamenti at login", testNotif: "Send a test notification", cleanNow: "Free up space now",
+    autoOff: "Automatic check off", autoNightly: t => `Automatic update every night at ${t}`, autoDaily: t => `Automatic check every day at ${t}`,
+    loginWarn: "Automatic checks only run while Aggiornamenti is running: turn on start at login so it keeps running after a restart.",
+    cleanInfo: "After every round of updates, installers and old versions are deleted.",
+    cleanLast: (a, x) => `Last cleanup: ${a}, ${x} freed.`, cleanRunning: "Cleaning…",
+    lastAuto: (a, n) => `Last automatic update: ${a} · ${n} updated`,
+    lastAutoFailed: (n, l) => `, ${n} failed (${l})`, lastAutoPostponed: l => `, postponed because in use: ${l}`,
+    pwSet: "Administrator password saved", pwUnset: "Administrator password not set",
+    pwPlaceholder: "Mac password", save: "Save", remove: "Remove",
+    pwHelp: "Some updates (App Store and apps with installers) need administrator privileges. The password is stored only in this Mac's Keychain and lets them finish without asking.",
+    pwChecking: "Checking…", pwSaved: "Saved in the Keychain.", pwRemoved: "Removed.",
+    version: "Version", news: "What's new", demo: "Demo mode: no changes to your system",
+  },
+};
+const forced = new URLSearchParams(location.search).get("lang");
+let lang = forced || (navigator.language || "en").slice(0, 2);
+let L = I18N[lang] || I18N.en;
+function setLang(code) {
+  if (forced || !code) return;
+  lang = code; L = I18N[lang] || I18N.en;
+}
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-t]").forEach(el => { el.textContent = L[el.dataset.t]; });
+  $("#pw").placeholder = L.pwPlaceholder;
+  document.title = L.title;
+}
+const locale = () => lang === "it" ? "it-IT" : "en-US";
+
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
@@ -232,20 +326,20 @@ async function api(path, body) {
 function ago(t) {
   if (!t) return "";
   const s = Math.round(Date.now() / 1000 - t);
-  if (s < 60) return "adesso";
-  if (s < 3600) return `${Math.floor(s / 60)} min fa`;
-  return new Date(t * 1000).toLocaleString("it-IT", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  if (s < 60) return L.now;
+  if (s < 3600) return L.minAgo(Math.floor(s / 60));
+  return new Date(t * 1000).toLocaleString(locale(), { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
 }
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function size(b) {
   if (!b) return "0 MB";
-  return b >= 1073741824 ? (b / 1073741824).toLocaleString("it-IT", { maximumFractionDigits: 1 }) + " GB"
-    : (b / 1048576).toLocaleString("it-IT", { maximumFractionDigits: 0 }) + " MB";
+  return b >= 1073741824 ? (b / 1073741824).toLocaleString(locale(), { maximumFractionDigits: 1 }) + " GB"
+    : (b / 1048576).toLocaleString(locale(), { maximumFractionDigits: 0 }) + " MB";
 }
 
-function mb(b) { return (b / 1048576).toLocaleString("it-IT", { maximumFractionDigits: b < 10485760 ? 1 : 0 }); }
+function mb(b) { return (b / 1048576).toLocaleString(locale(), { maximumFractionDigits: b < 10485760 ? 1 : 0 }); }
 
 function bar(pct) {
   const ind = pct === null || pct === undefined;
@@ -253,11 +347,12 @@ function bar(pct) {
 }
 
 function jobText(job) {
-  if (job.status === "queued") return ["In coda", "", 0];
+  if (job.status === "queued") return [L.queued, "", 0];
   let detail = "";
-  if (job.bytes) detail = job.total ? `${mb(job.bytes)} di ${mb(job.total)} MB` : `${mb(job.bytes)} MB`;
+  if (job.bytes) detail = job.total ? `${mb(job.bytes)} ${L.of} ${mb(job.total)} MB` : `${mb(job.bytes)} MB`;
   const known = job.pct !== null && job.pct !== undefined;
-  return [(job.phase || "In corso") + (detail ? " · " + detail : ""), known ? `${Math.round(job.pct)}%` : "", known ? job.pct : null];
+  const phase = L.phases[job.phase] || L.inProgress;
+  return [phase + (detail ? " · " + detail : ""), known ? `${Math.round(job.pct)}%` : "", known ? job.pct : null];
 }
 
 function jobProgress(id, job) {
@@ -293,7 +388,7 @@ function renderOverall() {
   if (!$("#overall .overall")) $("#overall").innerHTML = `<div class="overall">${bar(0)}<div class="phase"><span></span><span></span></div></div>`;
   $("#overall .fill").style.width = Math.max(2, pct) + "%";
   const spans = $("#overall").querySelectorAll(".phase span");
-  spans[0].textContent = `${Math.min(b.done + 1, b.total)} di ${b.total}`;
+  spans[0].textContent = `${Math.min(b.done + 1, b.total)} ${L.of} ${b.total}`;
   spans[1].textContent = `${Math.round(pct)}%`;
 }
 
@@ -313,19 +408,19 @@ function rowHtml(i, busy, ex) {
   const job = data.jobs[i.id];
   const st = i.updated ? "done" : job?.status;
   const status =
-    st === "done" ? "Aggiornata" :
+    st === "done" ? L.done :
     st === "running" ? (job.pct !== null && job.pct !== undefined ? "" : '<span class="spin"></span>') :
     st === "queued" ? "" :
-    st === "error" ? "Non riuscito" : "";
+    st === "error" ? L.failed : "";
   const act = busy || st === "running" || st === "queued" ? "" :
-    `<span class="act" data-act="${ex ? "include" : "exclude"}">${ex ? "Includi" : "Escludi"}</span>`;
+    `<span class="act" data-act="${ex ? "include" : "exclude"}">${ex ? L.include : L.exclude}</span>`;
   return `<li class="${st === "done" ? "done" : ""}">
     <div class="row" data-id="${esc(i.id)}" data-key="${esc(i.key)}">
       <input type="checkbox" ${selected.has(i.id) ? "checked" : ""} ${busy || i.updated ? "disabled" : ""}>
       ${iconHtml(i.path, i.kind)}
       <div style="min-width:0">
-        <div class="name">${esc(i.name)}${i.major ? '<span class="tag">versione maggiore</span>' : ""}${i.verified === false ? '<span class="tag">da verificare</span>' : ""}</div>
-        <div class="meta">${esc(i.installed)}<span class="arrow">→</span>${esc(i.latest)} · ${esc(i.source)}</div>
+        <div class="name">${esc(i.name)}${i.major ? `<span class="tag">${L.major}</span>` : ""}${i.verified === false ? `<span class="tag">${L.unverified}</span>` : ""}</div>
+        <div class="meta">${esc(i.installed)}<span class="arrow">→</span>${esc(i.latest)} · ${esc(L.sources[i.source] || i.source)}</div>
       </div>
       <div class="status ${st || ""}">${status}${act}</div>
       ${st === "running" || st === "queued" ? jobProgress(i.id, job) : ""}
@@ -345,17 +440,17 @@ function renderSettings() {
   set("#s_login", "checked", st.login);
   const on = st.daily_check || st.auto_update;
   $("#autodot").className = "dot" + (on && st.login ? " on" : "");
-  $("#autolabel").textContent = !on ? "Controllo automatico disattivato"
-    : st.auto_update ? `Aggiornamento automatico ogni notte alle ${st.auto_time}`
-    : `Controllo automatico ogni giorno alle ${st.check_time}`;
+  $("#autolabel").textContent = !on ? L.autoOff : st.auto_update ? L.autoNightly(st.auto_time) : L.autoDaily(st.check_time);
   const hint = $("#loginhint");
-  hint.textContent = on && !st.login ? "Il controllo automatico funziona solo mentre Aggiornamenti è attivo: attiva l'avvio all'accesso perché resti attivo anche dopo un riavvio." : "";
+  hint.textContent = on && !st.login ? L.loginWarn : "";
   hint.className = "hint" + (on && !st.login ? " warn" : "");
   const lc = st.last_cleanup;
-  $("#lastclean").textContent = data.cleaning ? "Pulizia in corso…" : lc ? `Dopo ogni giro di aggiornamenti installer e vecchie versioni vengono cancellati. Ultima pulizia: ${ago(lc.at)}, liberati ${size(lc.freed)}.` : "Dopo ogni giro di aggiornamenti installer e vecchie versioni vengono cancellati.";
+  $("#lastclean").textContent = data.cleaning ? L.cleanRunning : L.cleanInfo + (lc ? " " + L.cleanLast(ago(lc.at), size(lc.freed)) : "");
   $("#s_clean").disabled = data.running || data.scanning || data.cleaning;
   const la = st.last_auto;
-  $("#lastauto").textContent = la ? `Ultimo aggiornamento automatico: ${ago(la.at)} · ${la.updated.length} aggiornate${la.failed.length ? `, ${la.failed.length} non riuscite (${la.failed.join(", ")})` : ""}${la.postponed.length ? `, rimandate perché aperte: ${la.postponed.join(", ")}` : ""}` : "";
+  $("#lastauto").textContent = la ? L.lastAuto(ago(la.at), la.updated.length)
+    + (la.failed.length ? L.lastAutoFailed(la.failed.length, la.failed.join(", ")) : "")
+    + (la.postponed.length ? L.lastAutoPostponed(la.postponed.join(", ")) : "") : "";
 }
 
 async function saveSettings(patch) {
@@ -384,27 +479,27 @@ function render() {
   for (const id of [...selected]) if (!allPending.find(i => i.id === id)) selected.delete(id);
 
   $("#sub").innerHTML = data.scanning
-    ? '<span class="spin"></span>Controllo in corso…'
-    : data.cleaning ? '<span class="spin"></span>Pulizia della cache…'
-    : data.running ? "Aggiornamento in corso…"
-    : data.scan_error ? "Errore: " + esc(data.scan_error)
-    : todo.length === 0 ? `Tutto aggiornato · ${ago(data.scanned_at)}`
-    : `${todo.length} ${todo.length === 1 ? "aggiornamento disponibile" : "aggiornamenti disponibili"} · ${ago(data.scanned_at)}`;
+    ? `<span class="spin"></span>${L.scanning}`
+    : data.cleaning ? `<span class="spin"></span>${L.cleaning}`
+    : data.running ? L.updating
+    : data.scan_error ? L.error + esc(data.scan_error)
+    : todo.length === 0 ? `${L.allUpToDate} · ${ago(data.scanned_at)}`
+    : `${L.available(todo.length)} · ${ago(data.scanned_at)}`;
 
   renderOverall();
   $("#scan").disabled = busy;
   const n = selected.size;
   const nMain = todo.filter(i => selected.has(i.id)).length;
   $("#go").disabled = busy || n === 0;
-  $("#go").textContent = n && n === todo.length && nMain === n ? "Aggiorna tutto" : n ? `Aggiorna (${n})` : "Aggiorna";
+  $("#go").textContent = n && n === todo.length && nMain === n ? L.updateAll : n ? L.updateN(n) : L.update;
 
-  if (data.version && !$("#version").textContent)
-    $("#version").innerHTML = `Versione ${esc(data.version)} · <a href="https://github.com/giuseppelupo1979/aggiornamenti-mac/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Novità</a>`;
+  if (data.version)
+    $("#version").innerHTML = `${data.demo ? esc(L.demo) + " · " : ""}${L.version} ${esc(data.version)} · <a href="https://github.com/giuseppelupo1979/aggiornamenti-mac/blob/main/CHANGELOG.md" target="_blank" rel="noopener">${L.news}</a>`;
   renderSettings();
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
-  $("#pwlabel").textContent = data.password ? "Password di amministratore salvata" : "Password di amministratore non impostata";
+  $("#pwlabel").textContent = data.password ? L.pwSet : L.pwUnset;
 
-  const sig = JSON.stringify([busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
+  const sig = JSON.stringify([lang, busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
     const j = data.jobs[i.id];
     return [i.id, i.updated, j?.status, openLogs.has(i.id) ? j?.log : ""];
   })]);
@@ -413,15 +508,15 @@ function render() {
 
   let html = "";
   if (data.macos && data.macos.length) {
-    html += `<div class="notice"><div><div class="name">Aggiornamento di macOS disponibile</div><div class="meta">${data.macos.map(esc).join(" · ")}</div></div><button type="button" id="openSU">Apri Impostazioni</button></div>`;
+    html += `<div class="notice"><div><div class="name">${L.macos}</div><div class="meta">${data.macos.map(esc).join(" · ")}</div></div><button type="button" id="openSU">${L.openSettings}</button></div>`;
   }
   if (!main.length) {
-    html = data.scanning ? "" : '<div class="empty"><strong>Tutto aggiornato</strong>Nessuna app ha bisogno di aggiornamenti.</div>';
+    html += data.scanning ? "" : `<div class="empty"><strong>${L.allUpToDate}</strong>${L.noneNeeded}</div>`;
   } else {
-    html = `<div class="bar"><label><input type="checkbox" id="all" ${todo.length && nMain === todo.length ? "checked" : ""} ${busy || !todo.length ? "disabled" : ""}> Seleziona tutto</label><span>${nMain} di ${todo.length}</span></div>`;
+    html += `<div class="bar"><label><input type="checkbox" id="all" ${todo.length && nMain === todo.length ? "checked" : ""} ${busy || !todo.length ? "disabled" : ""}> ${L.selectAll}</label><span>${nMain} ${L.of} ${todo.length}</span></div>`;
     const groups = [
-      ["Applicazioni", main.filter(i => i.kind !== "formula")],
-      ["Strumenti da riga di comando", main.filter(i => i.kind === "formula")],
+      [L.apps, main.filter(i => i.kind !== "formula")],
+      [L.cli, main.filter(i => i.kind === "formula")],
     ].filter(g => g[1].length);
     for (const [title, list] of groups) {
       html += `<h2>${title}</h2><ul>${list.map(i => rowHtml(i, busy, false)).join("")}</ul>`;
@@ -433,15 +528,15 @@ function render() {
   if (ex.length) {
     const withUpdate = ex.filter(([k]) => items.some(i => i.key === k && !i.updated)).length;
     html += `<details class="excluded" ${exOpen ? "open" : ""}>
-      <summary>Escluse · ${ex.length}${withUpdate ? ` <span class="muted">(${withUpdate} con aggiornamento)</span>` : ""}</summary>
-      <p class="note">Queste app non compaiono nell'elenco principale e non vengono mai selezionate in automatico. Puoi comunque aggiornarle da qui quando serve.</p><ul>`;
+      <summary>${L.excluded} · ${ex.length}${withUpdate ? ` <span class="muted">${L.withUpdate(withUpdate)}</span>` : ""}</summary>
+      <p class="note">${L.excludedNote}</p><ul>`;
     for (const [key, info] of ex) {
       const it = items.find(i => i.key === key);
       if (it) { html += rowHtml(it, busy, true); continue; }
       html += `<li><div class="row static" data-key="${esc(key)}">
         <span></span>${iconHtml(info.path, info.kind)}
-        <div style="min-width:0"><div class="name">${esc(info.name)}</div><div class="meta">${data.scanning ? "Controllo in corso…" : "Nessun aggiornamento"}</div></div>
-        <div class="status">${busy ? "" : '<span class="act" data-act="include">Includi</span>'}</div>
+        <div style="min-width:0"><div class="name">${esc(info.name)}</div><div class="meta">${data.scanning ? L.scanning : L.noUpdate}</div></div>
+        <div class="status">${busy ? "" : `<span class="act" data-act="include">${L.include}</span>`}</div>
       </div></li>`;
     }
     html += "</ul></details>";
@@ -451,14 +546,14 @@ function render() {
   const un = data.unchecked || [];
   if (un.length && !data.scanning) {
     html += `<details class="excluded unchecked" ${unOpen ? "open" : ""}>
-      <summary>Non controllate · ${un.length}</summary>
-      <p class="note">Per queste app non esiste una fonte di aggiornamento che il programma sappia leggere: non è detto che siano aggiornate. Controllale ogni tanto dal menu dell'app o dal sito dello sviluppatore.</p><ul>`;
+      <summary>${L.unchecked} · ${un.length}</summary>
+      <p class="note">${L.uncheckedNote}</p><ul>`;
     for (const u of un) {
       const q = encodeURIComponent(`${u.name} mac download`);
       html += `<li><div class="row static">
         <span></span>${iconHtml(u.path)}
-        <div style="min-width:0"><div class="name">${esc(u.name)}</div><div class="meta reason">${esc(u.version || "versione sconosciuta")} · ${esc(u.reason)}</div></div>
-        <div class="status"><a class="act link" href="https://duckduckgo.com/?q=${q}" target="_blank" rel="noopener">Cerca</a></div>
+        <div style="min-width:0"><div class="name">${esc(u.name)}</div><div class="meta reason">${esc(u.version || L.unknownVersion)} · ${esc(L.reasons[u.reason] || u.reason)}</div></div>
+        <div class="status"><a class="act link" href="https://duckduckgo.com/?q=${q}" target="_blank" rel="noopener">${L.search}</a></div>
       </div></li>`;
     }
     html += "</ul></details>";
@@ -512,20 +607,27 @@ $("#pwform").onsubmit = async e => {
   e.preventDefault();
   const pw = $("#pw").value;
   if (!pw) return;
-  $("#pwmsg").textContent = "Verifica…";
-  try { data = await api("/api/password", { password: pw }); $("#pwmsg").textContent = "Salvata nel Portachiavi."; }
+  $("#pwmsg").textContent = L.pwChecking;
+  try { data = await api("/api/password", { password: pw }); $("#pwmsg").textContent = L.pwSaved; }
   catch (err) { $("#pwmsg").textContent = err.message; }
   $("#pw").value = "";
   render();
 };
 $("#pwdel").onclick = async () => {
   data = await api("/api/password", { password: "" });
-  $("#pwmsg").textContent = "Rimossa.";
+  $("#pwmsg").textContent = L.pwRemoved;
   render();
 };
 
+applyStatic();
+let langFromServer = false;
 async function poll() {
-  try { data = await api("/api/state"); render(); } catch {}
+  try {
+    data = await api("/api/state");
+    // la lingua del Mac (dal server) prevale su quella del browser
+    if (!langFromServer && data.lang) { setLang(data.lang); applyStatic(); langFromServer = true; }
+    render();
+  } catch {}
   setTimeout(poll, data.running ? 500 : data.scanning ? 1000 : 5000);
 }
 poll();

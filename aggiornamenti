@@ -1,0 +1,65 @@
+#!/bin/sh
+# aggiornamenti — avvia il server locale e apre la pagina.
+#
+#   aggiornamenti            avvia (se serve) e apre la pagina
+#   aggiornamenti start      avvia in background senza aprire la pagina
+#   aggiornamenti stop       ferma il server
+#   aggiornamenti demo       apre la modalità demo (dati finti, nessuna modifica al sistema)
+#   aggiornamenti app        crea l'app "Aggiornamenti" sulla Scrivania
+#   aggiornamenti version    mostra la versione
+
+DIR="${AGGIORNAMENTI_HOME:-$(cd "$(dirname "$0")" && pwd)}"
+SELF="${AGGIORNAMENTI_BIN:-$DIR/aggiornamenti}"
+LOG="$HOME/Library/Logs/AggiornamentiMac.log"
+
+PY=""
+for p in "$PYTHON" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  if [ -n "$p" ] && [ -x "$p" ]; then PY="$p"; break; fi
+done
+[ -n "$PY" ] || { echo "python3 non trovato / python3 not found" >&2; exit 1; }
+
+up() { curl -s --max-time 2 -o /dev/null "http://127.0.0.1:$1/api/state"; }
+
+start() { # $1 porta, $2 argomenti extra
+  if ! up "$1"; then
+    mkdir -p "$(dirname "$LOG")"
+    nohup "$PY" "$DIR/server.py" $2 < /dev/null >> "$LOG" 2>&1 &
+    i=0
+    while [ $i -lt 30 ]; do up "$1" && return 0; sleep 0.5; i=$((i + 1)); done
+    echo "Il server non risponde: vedi $LOG / Server not responding: see $LOG" >&2
+    return 1
+  fi
+}
+
+case "${1:-open}" in
+  open)
+    start 8765 && open "http://127.0.0.1:8765" ;;
+  start)
+    start 8765 ;;
+  stop)
+    pids=$(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null)
+    [ -n "$pids" ] && kill $pids ;;
+  demo)
+    start 8766 --demo && open "http://127.0.0.1:8766" ;;
+  app)
+    APP="$HOME/Desktop/Aggiornamenti.app"
+    SCRIPT="$(mktemp -t aggiornamenti).applescript"
+    printf 'do shell script quoted form of "%s" & " open > /dev/null 2>&1"\n' "$SELF" > "$SCRIPT"
+    rm -rf "$APP"
+    osacompile -o "$APP" "$SCRIPT" && rm -f "$SCRIPT"
+    ICON=/System/Library/PrivateFrameworks/SoftwareUpdate.framework/Versions/A/Resources/SoftwareUpdate.icns
+    if [ -f "$ICON" ]; then
+      cp "$ICON" "$APP/Contents/Resources/applet.icns"
+      rm -f "$APP/Contents/Resources/Assets.car"
+      /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$APP/Contents/Info.plist" 2>/dev/null
+    fi
+    codesign --force --deep -s - "$APP" > /dev/null 2>&1
+    touch "$APP"
+    echo "$APP" ;;
+  version|--version|-v)
+    sed -n 's/^VERSION = "\(.*\)".*/\1/p' "$DIR/server.py" ;;
+  help|--help|-h)
+    sed -n '2,9p' "$DIR/aggiornamenti" | sed 's/^# \{0,1\}//' ;;
+  *)
+    echo "Uso / Usage: aggiornamenti [open|start|stop|demo|app|version]" >&2; exit 2 ;;
+esac
