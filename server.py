@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.8.1"   # tenere allineata con CHANGELOG.md
+VERSION = "1.8.2"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -332,6 +332,8 @@ def do_self_update():
             rc, out = run([BREW, "upgrade", TAP_FORMULA], timeout=1200)
             log(out)
             ok = rc == 0
+            if ok:   # via la versione precedente: Homebrew la terrebbe accanto alla nuova
+                run([BREW, "cleanup", "aggiornamenti"], timeout=300)
         elif install_method() == "git":
             rc, out = run(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"], timeout=60)
             if out.strip():

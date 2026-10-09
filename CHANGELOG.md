@@ -2,6 +2,11 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.8.2] - 2026-10-09
+
+### Corretto
+- Aggiornando Aggiornamenti tramite Homebrew la versione precedente restava installata accanto alla nuova (e `brew uninstall` poi chiedeva `--force`). Ora viene rimossa subito dopo l'aggiornamento. Trovato nel test reale dell'auto-aggiornamento da 1.8.0 a 1.8.1.
+
 ## [1.8.1] - 2026-10-09
 
 ### Migliorato
