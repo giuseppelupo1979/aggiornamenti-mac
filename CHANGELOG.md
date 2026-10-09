@@ -2,6 +2,12 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.8.1] - 2026-10-09
+
+### Migliorato
+- Durante l'installazione di una nuova versione di Aggiornamenti il sottotitolo della pagina dice cosa sta succedendo ("Installazione di Aggiornamenti…", poi "Riavvio in corso…") invece del generico "Aggiornamento in corso…".
+- `aggiornamenti help` spiega come usare `AGG_PORT`.
+
 ## [1.8.0] - 2026-10-09
 
 ### Aggiunto

@@ -509,6 +509,8 @@ function render() {
   $("#sub").innerHTML = data.scanning
     ? `<span class="spin"></span>${L.scanning}`
     : data.cleaning ? `<span class="spin"></span>${L.cleaning}`
+    : data.self && data.self.status === "updating" ? `<span class="spin"></span>${L.selfUpdating(esc(data.self.available || ""))}`
+    : data.self && data.self.status === "restarting" ? `<span class="spin"></span>${L.selfRestarting}`
     : data.running ? L.updating
     : data.scan_error ? L.error + esc(data.scan_error)
     : todo.length === 0 ? `${L.allUpToDate} · ${ago(data.scanned_at)}`
