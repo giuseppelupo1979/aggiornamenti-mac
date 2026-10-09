@@ -11,6 +11,7 @@
 DIR="${AGGIORNAMENTI_HOME:-$(cd "$(dirname "$0")" && pwd)}"
 SELF="${AGGIORNAMENTI_BIN:-$DIR/aggiornamenti}"
 LOG="$HOME/Library/Logs/AggiornamentiMac.log"
+PORT="${AGG_PORT:-8765}"
 
 PY=""
 for p in "$PYTHON" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
@@ -33,11 +34,11 @@ start() { # $1 porta, $2 argomenti extra
 
 case "${1:-open}" in
   open)
-    start 8765 && open "http://127.0.0.1:8765" ;;
+    start "$PORT" && open "http://127.0.0.1:$PORT" ;;
   start)
-    start 8765 ;;
+    start "$PORT" ;;
   stop)
-    pids=$(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null)
+    pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)
     [ -n "$pids" ] && kill $pids ;;
   demo)
     start 8766 --demo && open "http://127.0.0.1:8766" ;;

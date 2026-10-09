@@ -2,6 +2,16 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.8.0] - 2026-10-09
+
+### Aggiunto
+- Avviso di nuove versioni di Aggiornamenti stesso: riquadro in cima alla pagina con link alle novità e pulsante "Installa", più una notifica di macOS dal controllo giornaliero (una sola per versione). Il controllo legge l'ultima Release su GitHub al massimo ogni 6 ore, oppure subito premendo "Controlla".
+- Installazione della nuova versione con un clic, adattata a come il programma è stato installato: `brew upgrade` per il tap Homebrew, `git` per una copia clonata (rifiutato se ci sono modifiche locali), archivio della Release per una copia scaricata. Il server si riavvia da solo e la pagina si ricarica sulla nuova versione.
+- Variabile `AGG_PORT` per usare una porta diversa dalla 8765.
+
+### Corretto
+- Un blocco (deadlock) introdotto durante lo sviluppo di questa funzione, trovato nei test prima della pubblicazione.
+
 ## [1.7.0] - 2026-10-08
 
 ### Aggiunto

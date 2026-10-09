@@ -17,6 +17,7 @@ Keeping a Mac up to date means juggling Homebrew, the App Store and dozens of ap
 - **Automatic mode.** A daily check with a clickable notification, or fully automatic nightly updates that never quit an app you are using.
 - **Honest about blind spots.** A "Not checked" section lists the apps no source can verify, with the reason for each.
 - **No leftovers.** Installers and old versions are deleted after every round of updates. The first cleanup on the author's Mac freed 6.4 GB.
+- **Keeps itself up to date.** When a new version of Aggiornamenti is released, the page shows it with a one-click *Install*, and the daily check sends a notification.
 - **English and Italian**, following your Mac's language. Light and dark mode.
 
 | | |
@@ -87,6 +88,10 @@ In the page:
 - **Automatic check** (at the bottom): daily check time, nightly updates and *start at login*. Turn on *start at login*, because the schedule only runs while the server is running.
 - **Administrator password** (optional): App Store updates and `.pkg` installers need admin rights. Without the password, everything else still works.
 
+- **New version of Aggiornamenti itself:** a box at the top of the page links to what's new and has an *Install* button. It upgrades the way you installed it (Homebrew, git clone or downloaded archive), restarts the server and reloads the page.
+
+To use a port other than 8765, set `AGG_PORT` (for example `AGG_PORT=9000 aggiornamenti`).
+
 The full manual is in Italian: [MANUALE.md](MANUALE.md).
 
 ## How it works
@@ -105,7 +110,7 @@ It is a single Python file using only the standard library, plus one HTML page. 
 
 This tool replaces apps and can run installers as administrator, so here is exactly what it does:
 
-- **Nothing leaves your Mac except the requests needed to check and download updates.** These go to the Homebrew catalog, the update feeds of your installed apps and the developers' download servers. There is no telemetry, no account and no analytics. A web search is opened only when you click *Search* yourself.
+- **Nothing leaves your Mac except the requests needed to check and download updates.** These go to the Homebrew catalog, the update feeds of your installed apps, the developers' download servers and, at most every six hours, GitHub's public API to see whether a new version of Aggiornamenti exists. There is no telemetry, no account and no analytics. A web search is opened only when you click *Search* yourself.
 - **The server listens only on `127.0.0.1`** and rejects requests that come from other websites.
 - **The administrator password is optional and lives only in your macOS Keychain** (item `aggiornamenti-mac`). It is checked before being saved, it is never written to disk or shown in the process list, and `askpass.sh` hands it to `sudo` only when an update needs it. You can remove it from the page at any time.
 - **Apps you installed by hand become managed by Homebrew** after their first update through this tool (`brew install --cask --force` replaces the existing copy). From then on Homebrew keeps them up to date. If you would rather not, exclude those apps.

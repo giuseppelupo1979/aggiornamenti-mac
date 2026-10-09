@@ -132,6 +132,10 @@
   .notice .meta { white-space: normal; }
   .act.link { opacity: 1; text-decoration: none; }
   .reason { white-space: normal; }
+  .notice.self { border-color: var(--fg); }
+  .notice .links { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+  .notice .links a { color: var(--muted); font-size: 13px; }
+  .notice pre.log { margin: 12px 0 0; }
 
   pre.log {
     margin: 0 4px 14px 74px; padding: 12px 14px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
@@ -259,6 +263,10 @@ const I18N = {
     pwHelp: "Alcuni aggiornamenti (App Store e programmi con installer) richiedono i privilegi di amministratore. La password viene salvata solo nel Portachiavi di questo Mac e serve a completarli senza chiedere nulla.",
     pwChecking: "Verifica…", pwSaved: "Salvata nel Portachiavi.", pwRemoved: "Rimossa.",
     version: "Versione", news: "Novità", demo: "Modalità demo: nessuna modifica al sistema",
+    selfAvail: v => `È disponibile Aggiornamenti ${v}`, selfCurrent: (v, via) => via ? `Hai la versione ${v}, installata ${via}.` : `Hai la versione ${v}.`,
+    selfInstall: "Installa", selfUpdating: v => `Installazione di Aggiornamenti ${v}…`,
+    selfRestarting: "Riavvio in corso, la pagina si ricarica da sola…", selfFailed: "Installazione non riuscita.",
+    selfLog: "Dettagli", selfVia: { brew: "tramite Homebrew", git: "tramite git", archive: "dall'archivio su GitHub" },
   },
   en: {
     title: "Aggiornamenti", check: "Check", update: "Update", updateAll: "Update all", updateN: n => `Update (${n})`,
@@ -297,6 +305,10 @@ const I18N = {
     pwHelp: "Some updates (App Store and apps with installers) need administrator privileges. The password is stored only in this Mac's Keychain and lets them finish without asking.",
     pwChecking: "Checking…", pwSaved: "Saved in the Keychain.", pwRemoved: "Removed.",
     version: "Version", news: "What's new", demo: "Demo mode: no changes to your system",
+    selfAvail: v => `Aggiornamenti ${v} is available`, selfCurrent: (v, via) => via ? `You have version ${v}, installed ${via}.` : `You have version ${v}.`,
+    selfInstall: "Install", selfUpdating: v => `Installing Aggiornamenti ${v}…`,
+    selfRestarting: "Restarting, the page will reload by itself…", selfFailed: "Installation failed.",
+    selfLog: "Details", selfVia: { brew: "via Homebrew", git: "via git", archive: "from the GitHub archive" },
   },
 };
 const forced = new URLSearchParams(location.search).get("lang");
@@ -465,6 +477,22 @@ $("#s_auto_time").onchange = e => e.target.value && saveSettings({ auto_time: e.
 $("#s_clean").onclick = async () => { try { data = await api("/api/cleanup", {}); } catch (e) { alert(e.message); } render(); };
 $("#s_test").onclick = async () => { await api("/api/notify-test", {}); };
 
+let selfLogOpen = false;
+function selfBanner() {
+  const s = data.self || {};
+  if (!s.available && !s.status) return "";
+  const v = esc(s.available || s.latest || "");
+  let right = "", sub = L.selfCurrent(esc(data.version), L.selfVia[s.method]);
+  if (s.status === "updating") { right = '<span class="spin"></span>'; sub = L.selfUpdating(v); }
+  else if (s.status === "restarting") { right = '<span class="spin"></span>'; sub = L.selfRestarting; }
+  else {
+    if (s.status === "error") sub = `<span style="color:var(--err)">${L.selfFailed}</span> <a href="#" id="selfLogToggle">${L.selfLog}</a>`;
+    right = `${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${L.news}</a>` : ""}<button type="button" id="selfInstall" class="primary">${L.selfInstall}</button>`;
+  }
+  return `<div class="notice self"><div style="min-width:0"><div class="name">${L.selfAvail(v)}</div><div class="meta reason">${sub}</div>
+    ${s.status === "error" && selfLogOpen && s.log ? `<pre class="log">${esc(s.log)}</pre>` : ""}</div><div class="links">${right}</div></div>`;
+}
+
 function render() {
   const busy = data.scanning || data.running;
   const items = data.items;
@@ -499,14 +527,14 @@ function render() {
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
   $("#pwlabel").textContent = data.password ? L.pwSet : L.pwUnset;
 
-  const sig = JSON.stringify([lang, busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
+  const sig = JSON.stringify([lang, data.self && [data.self.available, data.self.status, selfLogOpen], busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
     const j = data.jobs[i.id];
     return [i.id, i.updated, j?.status, openLogs.has(i.id) ? j?.log : ""];
   })]);
   if (sig === lastSig) return patchProgress();
   lastSig = sig;
 
-  let html = "";
+  let html = selfBanner();
   if (data.macos && data.macos.length) {
     html += `<div class="notice"><div><div class="name">${L.macos}</div><div class="meta">${data.macos.map(esc).join(" · ")}</div></div><button type="button" id="openSU">${L.openSettings}</button></div>`;
   }
@@ -567,6 +595,11 @@ function render() {
 
 $("#list").addEventListener("click", async e => {
   if (e.target.id === "openSU") return api("/api/open-software-update", {});
+  if (e.target.id === "selfInstall") {
+    try { data = await api("/api/self-update", {}); } catch (err) { alert(err.message); }
+    return render();
+  }
+  if (e.target.id === "selfLogToggle") { e.preventDefault(); selfLogOpen = !selfLogOpen; return render(); }
   if (e.target.id === "all") {
     const main = pending().filter(i => !isEx(i));
     if (e.target.checked) main.forEach(i => selected.add(i.id)); else main.forEach(i => selected.delete(i.id));
@@ -621,14 +654,19 @@ $("#pwdel").onclick = async () => {
 
 applyStatic();
 let langFromServer = false;
+let startVersion = null;
 async function poll() {
   try {
     data = await api("/api/state");
+    // dopo l'aggiornamento di sé stesso il server riparte con un'altra versione: si ricarica la pagina
+    if (startVersion && data.version !== startVersion) return location.reload();
+    startVersion = startVersion || data.version;
     // la lingua del Mac (dal server) prevale su quella del browser
     if (!langFromServer && data.lang) { setLang(data.lang); applyStatic(); langFromServer = true; }
     render();
   } catch {}
-  setTimeout(poll, data.running ? 500 : data.scanning ? 1000 : 5000);
+  const selfBusy = data.self && (data.self.status === "updating" || data.self.status === "restarting");
+  setTimeout(poll, data.running || selfBusy ? 500 : data.scanning ? 1000 : 5000);
 }
 poll();
 </script>

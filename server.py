@@ -29,13 +29,17 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.7.0"   # tenere allineata con CHANGELOG.md
+VERSION = "1.8.0"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
-HOST, PORT = "127.0.0.1", 8766 if DEMO else 8765
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("AGG_PORT") or (8766 if DEMO else 8765))
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.expanduser("~/Library/Caches/AggiornamentiMac")
 CASK_API = "https://formulae.brew.sh/api/cask.json"
+REPO = "giuseppelupo1979/aggiornamenti-mac"
+RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+TAP_FORMULA = "giuseppelupo1979/tap/aggiornamenti"
 KEYCHAIN_SERVICE = "aggiornamenti-mac"
 ASKPASS = os.path.join(ROOT, "askpass.sh")
 SPARKLE_NS = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
@@ -104,6 +108,10 @@ MESSAGES = {
     "closing": ("Chiudo {x}",) * 2 + ("Quitting {x}",) * 2,
     "busy": ("Attendi la fine dell'operazione in corso",) * 2 + ("Wait for the current operation to finish",) * 2,
     "bad_pw": ("Password non corretta",) * 2 + ("Wrong password",) * 2,
+    "self_title": ("Aggiornamenti {x} disponibile",) * 2 + ("Aggiornamenti {x} is available",) * 2,
+    "self_body": ("Apri la pagina per installare la nuova versione.",) * 2 + ("Open the page to install the new version.",) * 2,
+    "self_dirty": ("La cartella del programma contiene modifiche locali: aggiornala a mano con git.",) * 2
+                  + ("The program folder has local changes: update it manually with git.",) * 2,
 }
 
 
@@ -126,6 +134,8 @@ state = {
     "unchecked": [],      # app che nessuna fonte sa controllare
     "macos": [],          # aggiornamenti di sistema disponibili
     "cleaning": False,
+    # nuova versione di Aggiornamenti stesso: {latest, url, notes, checked_at, status, log}
+    "self": {"latest": None, "url": None, "notes": "", "checked_at": 0, "status": None, "log": ""},
 }
 
 
@@ -251,6 +261,123 @@ def start_scan_sync():
                 return True
 
 
+# ---------------------------------------------------------------- aggiornamento di Aggiornamenti
+
+def install_method():
+    """Come è stato installato il programma: decide come aggiornarlo."""
+    if "/Cellar/aggiornamenti/" in os.path.realpath(ROOT):
+        return "brew"
+    if os.path.isdir(os.path.join(ROOT, ".git")):
+        return "git"
+    return "archive"
+
+
+def check_self_update(force=False):
+    """Legge l'ultima Release su GitHub (al massimo ogni 6 ore, salvo force)."""
+    with lock:
+        info = state["self"]
+        if not force and time.time() - info["checked_at"] < 6 * 3600:
+            return
+        info["checked_at"] = time.time()
+    if DEMO:
+        with lock:
+            state["self"].update(latest="1.9.0", url=f"https://github.com/{REPO}/releases", notes="Demo")
+        return
+    try:
+        req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "AggiornamentiMac",
+                                                             "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            rel = json.load(r)
+        latest = str(rel.get("tag_name", "")).lstrip("v")
+        if latest:
+            with lock:
+                state["self"].update(latest=latest, url=rel.get("html_url"), notes=rel.get("body") or "")
+    except Exception as e:
+        print("controllo nuova versione:", e, flush=True)
+
+
+def self_update_available():
+    with lock:
+        latest = state["self"]["latest"]
+    return latest if latest and newer(latest, VERSION) else None
+
+
+def restart_server():
+    """Riavvia lo stesso processo con il codice nuovo (stesso pid: va bene anche per launchd)."""
+    time.sleep(1.5)   # lascia alla pagina il tempo di vedere lo stato "restarting"
+    os.environ["AGG_RESTARTED"] = "1"
+    script = os.path.join(ROOT, "server.py")
+    os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
+
+
+def do_self_update():
+    global VERSION
+    latest = self_update_available()
+    lines = []
+
+    def log(text):
+        if text and text.strip():
+            lines.append(text.strip())
+            with lock:
+                state["self"]["log"] = "\n".join(lines)[-6000:]
+
+    ok = False
+    try:
+        if DEMO:
+            time.sleep(3)
+            ok = True
+        elif install_method() == "brew":
+            rc, out = run([BREW, "update", "--quiet"], timeout=600, env={**ENV, "HOMEBREW_NO_AUTO_UPDATE": ""})
+            log(out)
+            rc, out = run([BREW, "upgrade", TAP_FORMULA], timeout=1200)
+            log(out)
+            ok = rc == 0
+        elif install_method() == "git":
+            rc, out = run(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"], timeout=60)
+            if out.strip():
+                log(t("self_dirty") + "\n" + out)
+            else:
+                rc, out = run(["git", "-C", ROOT, "fetch", "--tags", "origin"], timeout=300)
+                log(out)
+                rc, branch = run(["git", "-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], timeout=30)
+                cmd = (["git", "-C", ROOT, "checkout", f"v{latest}"] if branch.strip() == "HEAD"
+                       else ["git", "-C", ROOT, "merge", "--ff-only", f"origin/{branch.strip()}"])
+                rc, out = run(cmd, timeout=300)
+                log(out)
+                ok = rc == 0
+        else:
+            url = f"https://github.com/{REPO}/archive/refs/tags/v{latest}.tar.gz"
+            work = tempfile.mkdtemp(prefix="agg-", dir=CACHE)
+            try:
+                archive = os.path.join(work, "src.tar.gz")
+                log(t("downloading", x=url))
+                req = urllib.request.Request(url, headers={"User-Agent": "AggiornamentiMac"})
+                with urllib.request.urlopen(req, timeout=300) as r, open(archive, "wb") as f:
+                    shutil.copyfileobj(r, f)
+                rc, out = run(["tar", "-xzf", archive, "-C", work], timeout=300)
+                src = next(iter(glob.glob(os.path.join(work, "aggiornamenti-mac-*"))), None)
+                if rc == 0 and src and os.path.exists(os.path.join(src, "server.py")):
+                    shutil.copytree(src, ROOT, dirs_exist_ok=True)
+                    ok = True
+                else:
+                    log(out)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+    except Exception as e:
+        log(str(e))
+
+    with lock:
+        state["self"]["status"] = "restarting" if ok else "error"
+        state["running"] = False
+    if ok and not DEMO:
+        restart_server()
+    elif ok:
+        time.sleep(1.5)
+        VERSION = latest
+        with lock:
+            state["self"]["status"] = None
+
+
 def scheduled_check():
     if not start_scan_sync():
         return
@@ -258,6 +385,12 @@ def scheduled_check():
     if todo:
         names = ", ".join(i["name"] for i in todo[:3]) + ("…" if len(todo) > 3 else "")
         notify(t("available", len(todo)), names)
+    latest = self_update_available()
+    s = load_settings()
+    if latest and s.get("self_notified") != latest:   # una notifica sola per versione
+        notify(t("self_title", x=latest), t("self_body"))
+        s["self_notified"] = latest
+        save_settings(s)
 
 
 def auto_update():
@@ -782,7 +915,8 @@ def demo_update(item):
         state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
 
 
-def do_scan():
+def do_scan(force_self_check=False):
+    threading.Thread(target=check_self_update, args=(force_self_check,), daemon=True).start()
     if DEMO:
         return demo_scan()
     _by_token.clear()
@@ -1106,6 +1240,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def snapshot(self):
+        available, method = self_update_available(), install_method()   # prendono il lock da sole
         with lock:
             return {
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
@@ -1113,6 +1248,7 @@ class Handler(BaseHTTPRequestHandler):
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
                 "cleaning": state["cleaning"],
                 "version": VERSION, "lang": LANG, "demo": DEMO,
+                "self": {**state["self"], "available": available, "method": method},
                 "password": has_password(),
                 "excluded": load_excluded(),
                 "unchecked": state["unchecked"], "macos": state["macos"],
@@ -1159,7 +1295,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if not state["scanning"] and not state["running"]:
                     state["scanning"] = True
-                    threading.Thread(target=do_scan, daemon=True).start()
+                    threading.Thread(target=do_scan, args=(True,), daemon=True).start()
             return self.send(200, self.snapshot())
         if u.path == "/api/update":
             ids = set(body.get("ids") or [])
@@ -1189,6 +1325,19 @@ class Handler(BaseHTTPRequestHandler):
             save_settings(s)
             if "login" in body:
                 set_login(bool(body["login"]))
+            return self.send(200, self.snapshot())
+        if u.path == "/api/self-update":
+            with lock:
+                if state["running"] or state["scanning"] or state["cleaning"]:
+                    return self.send(409, {"error": t("busy")})
+                state["running"] = True
+                state["self"].update(status="updating", log="")
+            if not self_update_available():
+                with lock:
+                    state["running"] = False
+                    state["self"]["status"] = None
+                return self.send(409, {"error": "no update"})
+            threading.Thread(target=do_self_update, daemon=True).start()
             return self.send(200, self.snapshot())
         if u.path == "/api/cleanup":
             with lock:
@@ -1250,11 +1399,17 @@ def main():
         os.chmod(ASKPASS, 0o755)
     with lock:
         state["scanning"] = True
-    try:
-        srv = ThreadingHTTPServer((HOST, PORT), Handler)
-    except OSError:
-        print("Porta già in uso: Aggiornamenti è già attivo.", flush=True)
-        sys.exit(0)
+    # dopo un aggiornamento di sé stesso la porta può restare occupata per un istante
+    attempts = 20 if os.environ.pop("AGG_RESTARTED", None) else 1
+    for i in range(attempts):
+        try:
+            srv = ThreadingHTTPServer((HOST, PORT), Handler)
+            break
+        except OSError:
+            if i == attempts - 1:
+                print("Porta già in uso: Aggiornamenti è già attivo.", flush=True)
+                sys.exit(0)
+            time.sleep(0.5)
     threading.Thread(target=do_scan, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     for d in glob.glob(os.path.join(CACHE, "agg-*")):

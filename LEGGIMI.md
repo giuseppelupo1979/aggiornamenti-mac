@@ -15,6 +15,7 @@
 - **Modalità automatica:** controllo giornaliero con notifica cliccabile, oppure aggiornamento notturno che non chiude mai un'app che stai usando.
 - **Onesto sui punti ciechi:** la sezione "Non controllate" elenca le app che nessuna fonte sa verificare, con il motivo.
 - **Nessun avanzo su disco:** installer e vecchie versioni vengono cancellati dopo ogni giro. Sul Mac dell'autore la prima pulizia ha liberato 6,4 GB.
+- **Si aggiorna da solo:** quando esce una nuova versione di Aggiornamenti la pagina la segnala con un pulsante *Installa*, e il controllo giornaliero manda una notifica.
 - **Italiano e inglese** secondo la lingua del Mac, tema chiaro e scuro.
 
 | | |
@@ -77,11 +78,13 @@ La modalità demo mostra app di esempio e simula gli aggiornamenti su una porta 
 | `aggiornamenti app` | crea l'app Aggiornamenti sulla Scrivania |
 | `aggiornamenti version` | mostra la versione |
 
+Per usare una porta diversa dalla 8765 imposta `AGG_PORT` (per esempio `AGG_PORT=9000 aggiornamenti`).
+
 Il manuale d'uso completo è in [MANUALE.md](MANUALE.md), le novità di ogni versione in [CHANGELOG.md](CHANGELOG.md).
 
 ## Privacy e sicurezza
 
-- **Dal Mac escono solo le richieste necessarie** a controllare e scaricare gli aggiornamenti: catalogo Homebrew, canali di aggiornamento delle app installate, server di download degli sviluppatori. Niente telemetria, niente account. La ricerca web si apre solo se premi tu *Cerca*.
+- **Dal Mac escono solo le richieste necessarie** a controllare e scaricare gli aggiornamenti: catalogo Homebrew, canali di aggiornamento delle app installate, server di download degli sviluppatori e, al massimo ogni sei ore, l'API pubblica di GitHub per sapere se esiste una nuova versione di Aggiornamenti. Niente telemetria, niente account. La ricerca web si apre solo se premi tu *Cerca*.
 - **Il server ascolta solo su `127.0.0.1`** e rifiuta richieste da altri siti, compresi i tentativi di DNS rebinding.
 - **La password di amministratore è facoltativa e sta solo nel Portachiavi** (voce `aggiornamenti-mac`). Viene verificata prima di essere salvata, non viene mai scritta su disco né compare nei processi, e si rimuove dalla pagina in qualsiasi momento.
 - **Le app installate a mano passano sotto Homebrew** al primo aggiornamento fatto da qui (`brew install --cask --force` sostituisce la copia esistente). Se non lo vuoi, escludile.

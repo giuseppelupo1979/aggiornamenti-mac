@@ -110,6 +110,12 @@ Senza password tutto il resto funziona lo stesso: solo gli aggiornamenti che la 
 - Gli aggiornamenti di macOS vengono segnalati ma non installati: si fanno da Impostazioni di Sistema.
 - Il confronto delle versioni è numerico. Se uno sviluppatore numera in modo strano (2.6.4 contro 2.26) può comparire un falso aggiornamento: in quel caso basta deselezionarlo.
 
+## Nuove versioni di Aggiornamenti
+
+Il programma controlla da solo se è uscita una sua nuova versione, al massimo ogni sei ore e ogni volta che premi **Controlla**. Quando c'è, in cima alla pagina compare un riquadro con il numero della versione, il link **Novità** e il pulsante **Installa**; il controllo giornaliero manda anche una notifica, una sola volta per ogni versione.
+
+Premendo **Installa** il programma si aggiorna nel modo in cui l'hai installato: con Homebrew se l'hai preso dal tap, con git se hai clonato il repository, scaricando l'archivio della versione se l'hai scaricato a mano. Poi si riavvia e la pagina si ricarica da sola. Se hai modificato i file di una copia clonata con git, l'aggiornamento automatico si ferma per non perdere le tue modifiche e ti chiede di farlo a mano.
+
 ## Chiudere il programma
 
 Il server resta attivo in background finché non riavvii il Mac, oppure sempre se hai attivato l'avvio all'accesso. Per fermarlo:
