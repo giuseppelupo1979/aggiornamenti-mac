@@ -90,6 +90,8 @@ Il manuale d'uso completo è in [MANUALE.md](MANUALE.md), le novità di ogni ver
 - **Le app installate a mano passano sotto Homebrew** al primo aggiornamento fatto da qui (`brew install --cask --force` sostituisce la copia esistente). Se non lo vuoi, escludile.
 - **I download Sparkle sono verificati:** app e `.pkg` si installano solo se la firma è valida e appartiene allo stesso sviluppatore (Team ID) della versione installata.
 - **L'aggiornamento notturno è prudente:** salta app escluse, versioni maggiori e abbinamenti da verificare, e non chiude mai le app aperte.
+- **Nessuna app viene chiusa d'autorità senza il tuo consenso:** se un'app non si chiude da sola (per esempio perché chiede di salvare), la riga offre *Forza chiusura* o *Rimanda* e decidi tu.
+- **Nessun "tutto aggiornato" per errore:** se Homebrew non risponde la pagina lo dice e mostra l'ultimo elenco valido.
 
 ## Limiti
 

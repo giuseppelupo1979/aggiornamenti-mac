@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.8.2"   # tenere allineata con CHANGELOG.md
+VERSION = "1.9.0"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -49,6 +49,9 @@ SUPPORT = (tempfile.mkdtemp(prefix="aggiornamenti-demo-") if DEMO
            else os.path.expanduser("~/Library/Application Support/AggiornamentiMac"))
 EXCLUDED_FILE = os.path.join(SUPPORT, "esclusi.json")
 SETTINGS_FILE = os.path.join(SUPPORT, "impostazioni.json")
+HISTORY_FILE = os.path.join(SUPPORT, "storico.json")
+LOG_FILE = (os.path.join(SUPPORT, "eventi.log") if DEMO
+            else os.path.expanduser("~/Library/Logs/AggiornamentiMac-eventi.log"))
 LAUNCH_LABEL = "com.aggiornamenti-mac"
 LAUNCH_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCH_LABEL}.plist")
 PAGE_URL = f"http://{HOST}:{PORT}"
@@ -106,6 +109,11 @@ MESSAGES = {
     "team_diff": ("Firma diversa ({a} invece di {b}): annullato per sicurezza",) * 2 + ("Different signature ({a} instead of {b}): cancelled for safety",) * 2,
     "bad_sig": ("Firma non valida: {x}",) * 2 + ("Invalid signature: {x}",) * 2,
     "closing": ("Chiudo {x}",) * 2 + ("Quitting {x}",) * 2,
+    "app_open": ("{x} non si è chiuso (forse chiede di salvare un documento): scegli se forzarne la chiusura o rimandare.",) * 2
+                + ("{x} did not quit (it may be asking to save a document): choose whether to force it or postpone.",) * 2,
+    "postponed_open": ("{x} è aperta: rimandata al prossimo giro.",) * 2 + ("{x} is open: postponed to the next run.",) * 2,
+    "reopen_failed": ("Aggiornata, ma non sono riuscito a riaprirla: {x}",) * 2 + ("Updated, but could not reopen it: {x}",) * 2,
+    "scan_brew": ("Homebrew non ha risposto",) * 2 + ("Homebrew did not respond",) * 2,
     "busy": ("Attendi la fine dell'operazione in corso",) * 2 + ("Wait for the current operation to finish",) * 2,
     "bad_pw": ("Password non corretta",) * 2 + ("Wrong password",) * 2,
     "self_title": ("Aggiornamenti {x} disponibile",) * 2 + ("Aggiornamenti {x} is available",) * 2,
@@ -134,6 +142,11 @@ state = {
     "unchecked": [],      # app che nessuna fonte sa controllare
     "macos": [],          # aggiornamenti di sistema disponibili
     "cleaning": False,
+    "stale": False,       # l'ultimo controllo non è riuscito: l'elenco è quello del controllo precedente
+    "scan_warnings": [],  # fonti che non hanno risposto (elenco forse incompleto)
+    "stop": False,        # "Interrompi": finisce l'installazione in corso e salta le successive
+    "quit_after": False,  # "Esci" chiesto durante un aggiornamento: si esce alla fine
+    "quitting": False,
     # nuova versione di Aggiornamenti stesso: {latest, url, notes, checked_at, status, log}
     "self": {"latest": None, "url": None, "notes": "", "checked_at": 0, "status": None, "log": ""},
 }
@@ -148,19 +161,58 @@ def item_key(item):
     return item["id"]
 
 
-def load_excluded():
+files_lock = threading.RLock()   # impostazioni, esclusioni e storico: mai due scritture insieme
+
+
+def log_line(*parts):
     try:
-        with open(EXCLUDED_FILE) as f:
-            return json.load(f)
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 1024 * 1024:
+            os.replace(LOG_FILE, LOG_FILE + ".1")   # rotazione: al massimo ~2 MB di registro
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + " ".join(str(p) for p in parts) + "\n")
     except Exception:
-        return {}
+        pass
+
+
+def _load(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, type(default)):
+            raise ValueError("formato inatteso")
+        return {**default, **data} if isinstance(default, dict) else data
+    except Exception:
+        return type(default)(default)
+
+
+def _save(path, data):
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"   # mai due scritture sullo stesso file temporaneo
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def load_excluded():
+    with files_lock:
+        return _load(EXCLUDED_FILE, {})
 
 
 def save_excluded(data):
-    tmp = EXCLUDED_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, EXCLUDED_FILE)
+    with files_lock:
+        _save(EXCLUDED_FILE, data)
+
+
+def add_history(entry):
+    """Storico persistente degli aggiornamenti (ultimi 300)."""
+    with files_lock:
+        h = _load(HISTORY_FILE, [])
+        h.append({"at": time.time(), **entry})
+        _save(HISTORY_FILE, h[-300:])
+
+
+def load_history():
+    with files_lock:
+        return _load(HISTORY_FILE, [])
 
 
 # ---------------------------------------------------------------- impostazioni e pianificazione
@@ -178,18 +230,22 @@ DEFAULT_SETTINGS = {
 
 
 def load_settings():
-    try:
-        with open(SETTINGS_FILE) as f:
-            return {**DEFAULT_SETTINGS, **json.load(f)}
-    except Exception:
-        return dict(DEFAULT_SETTINGS)
+    with files_lock:
+        return _load(SETTINGS_FILE, DEFAULT_SETTINGS)
 
 
 def save_settings(data):
-    tmp = SETTINGS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, SETTINGS_FILE)
+    with files_lock:
+        _save(SETTINGS_FILE, data)
+
+
+def update_settings(change):
+    """Modifica atomica delle impostazioni: change(s) riceve il dizionario e lo modifica."""
+    with files_lock:
+        s = load_settings()
+        change(s)
+        save_settings(s)
+        return s
 
 
 def login_enabled():
@@ -281,7 +337,8 @@ def check_self_update(force=False):
         info["checked_at"] = time.time()
     if DEMO:
         with lock:
-            state["self"].update(latest="1.9.0", url=f"https://github.com/{REPO}/releases", notes="Demo")
+            major, minor = (vparts(VERSION) + [0, 0])[:2]   # sempre una versione "più nuova" di quella attuale
+            state["self"].update(latest=f"{major}.{minor + 1}.0", url=f"https://github.com/{REPO}/releases", notes="Demo")
         return
     try:
         req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "AggiornamentiMac",
@@ -293,7 +350,7 @@ def check_self_update(force=False):
             with lock:
                 state["self"].update(latest=latest, url=rel.get("html_url"), notes=rel.get("body") or "")
     except Exception as e:
-        print("controllo nuova versione:", e, flush=True)
+        log_line("controllo nuova versione", e)
 
 
 def self_update_available():
@@ -342,8 +399,10 @@ def do_self_update():
                 rc, out = run(["git", "-C", ROOT, "fetch", "--tags", "origin"], timeout=300)
                 log(out)
                 rc, branch = run(["git", "-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], timeout=30)
-                cmd = (["git", "-C", ROOT, "checkout", f"v{latest}"] if branch.strip() == "HEAD"
-                       else ["git", "-C", ROOT, "merge", "--ff-only", f"origin/{branch.strip()}"])
+                # si installa esattamente la versione pubblicata (il tag), non il ramo con eventuali
+                # modifiche successive non ancora rilasciate
+                cmd = (["git", "-C", ROOT, "checkout", "--quiet", f"v{latest}"] if branch.strip() == "HEAD"
+                       else ["git", "-C", ROOT, "merge", "--ff-only", f"v{latest}"])
                 rc, out = run(cmd, timeout=300)
                 log(out)
                 ok = rc == 0
@@ -381,42 +440,48 @@ def do_self_update():
 
 
 def scheduled_check():
+    """Controllo giornaliero con notifica. False se non è potuto avvenire: lo scheduler riprova."""
     if not start_scan_sync():
-        return
+        return False
+    with lock:
+        if state["stale"]:
+            return False   # il controllo non è riuscito: niente notifica falsa, si riprova
     todo = visible_pending()
     if todo:
         names = ", ".join(i["name"] for i in todo[:3]) + ("…" if len(todo) > 3 else "")
         notify(t("available", len(todo)), names)
     latest = self_update_available()
-    s = load_settings()
-    if latest and s.get("self_notified") != latest:   # una notifica sola per versione
+    if latest and load_settings().get("self_notified") != latest:   # una notifica sola per versione
         notify(t("self_title", x=latest), t("self_body"))
-        s["self_notified"] = latest
-        save_settings(s)
+        update_settings(lambda st: st.update(self_notified=latest))
+    return True
 
 
 def auto_update():
+    """Aggiornamento notturno. Restituisce False se non è potuto partire (programma occupato), così
+    lo scheduler riprova invece di considerare fatta la giornata."""
     if not start_scan_sync():
-        return
-    candidates = [i for i in visible_pending() if not i.get("major") and i.get("verified") is not False]
-    ids, postponed = [], []
-    for i in candidates:
-        if i["kind"] in ("cask", "adopt", "sparkle") and running_app(i.get("bundle_id")):
-            postponed.append(i["name"])   # mai chiudere un'app mentre la stai usando
-        else:
-            ids.append(i["id"])
+        return False
+    with lock:
+        if state["stale"]:
+            return True   # scansione fallita: niente aggiornamenti alla cieca, si riprova domani
+    ids = [i["id"] for i in visible_pending() if not i.get("major") and i.get("verified") is not False]
     if ids:
         with lock:
             if state["running"] or state["scanning"]:
-                return
+                return False
             state["running"] = True
-        do_updates(set(ids))
+        # modalità "auto": ogni app viene ricontrollata subito prima dell'installazione e,
+        # se aperta, rimandata (mai chiusa mentre la stai usando)
+        do_updates(set(ids), mode="auto")
     with lock:
-        updated = [i["name"] for i in state["items"] if i["id"] in ids and i.get("updated")]
-        failed = [i["name"] for i in state["items"] if i["id"] in ids and not i.get("updated")]
-    s = load_settings()
-    s["last_auto"] = {"at": time.time(), "updated": updated, "failed": failed, "postponed": postponed}
-    save_settings(s)
+        jobs = {k: v["status"] for k, v in state["jobs"].items() if k in ids}
+        names = {i["id"]: i["name"] for i in state["items"]}
+    updated = [names[k] for k, st in jobs.items() if st == "done"]
+    failed = [names[k] for k, st in jobs.items() if st in ("error", "blocked")]
+    postponed = [names[k] for k, st in jobs.items() if st == "postponed"]
+    s = update_settings(lambda st: st.update(last_auto={"at": time.time(), "updated": updated,
+                                                        "failed": failed, "postponed": postponed}))
     if updated or failed or postponed:
         parts = []
         if updated:
@@ -425,40 +490,47 @@ def auto_update():
             parts.append(t("upd_fail", len(failed)))
         if postponed:
             parts.append(t("upd_postponed", len(postponed)))
-        lc = load_settings().get("last_cleanup") or {}
-        if ids and lc.get("freed"):
+        lc = s.get("last_cleanup") or {}
+        if lc.get("freed"):
             parts.append(t("freed", x=human(lc["freed"])))
         notify(t("auto_title"), ", ".join(parts))
+    return True
 
 
-def due(hhmm, last_day, now):
+NIGHT_WINDOW_HOURS = 5   # l'aggiornamento "notturno" recupera al risveglio solo entro 5 ore dall'orario scelto
+
+
+def due(hhmm, last_day, now, window_hours=None):
+    """Vero se oggi non è ancora stato fatto e siamo dopo l'orario (entro la finestra, se indicata)."""
     try:
         h, m = map(int, hhmm.split(":"))
     except Exception:
         return False
-    return last_day != now.date().isoformat() and now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+    start = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if last_day == now.date().isoformat() or now < start:
+        return False
+    return window_hours is None or now < start + dt.timedelta(hours=window_hours)
 
 
 def scheduler():
     """Controlla ogni 30 secondi se è ora del controllo o dell'aggiornamento automatico.
-    Se il Mac dormiva all'ora prevista, recupera appena si risveglia."""
+    Se il Mac dormiva all'ora prevista, il controllo recupera appena si risveglia; l'aggiornamento
+    notturno solo entro poche ore, per non chiudere e aggiornare app in pieno giorno."""
     while True:
         time.sleep(30)
         try:
             now = dt.datetime.now()
             today = now.date().isoformat()
             s = load_settings()
-            if s["auto_update"] and due(s["auto_time"], s["last_auto_day"], now):
-                s["last_auto_day"] = today
-                s["last_check_day"] = today   # l'aggiornamento include già il controllo
-                save_settings(s)
-                auto_update()
+            if s["auto_update"] and due(s["auto_time"], s["last_auto_day"], now, NIGHT_WINDOW_HOURS):
+                # la giornata si segna come fatta solo se l'aggiornamento è davvero partito
+                if auto_update():
+                    update_settings(lambda st: st.update(last_auto_day=today, last_check_day=today))
             elif s["daily_check"] and due(s["check_time"], s["last_check_day"], now):
-                s["last_check_day"] = today
-                save_settings(s)
-                scheduled_check()
+                if scheduled_check():
+                    update_settings(lambda st: st.update(last_check_day=today))
         except Exception as e:
-            print("scheduler:", e, flush=True)
+            log_line("scheduler", e)
 
 
 # ---------------------------------------------------------------- utilità
@@ -475,6 +547,13 @@ def run_stream(cmd, on_line, timeout=3600):
     timer = threading.Timer(timeout, p.kill)
     timer.start()
     out, buf = [], b""
+
+    def emit(part):
+        line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", part.decode("utf-8", "replace")).rstrip()
+        if line.strip():
+            out.append(line)
+            on_line(line)
+
     try:
         while True:
             chunk = p.stdout.read1(4096)
@@ -483,15 +562,12 @@ def run_stream(cmd, on_line, timeout=3600):
             buf += chunk
             *parts, buf = re.split(rb"[\r\n]", buf)
             for part in parts:
-                line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", part.decode("utf-8", "replace")).rstrip()
-                if line.strip():
-                    out.append(line)
-                    on_line(line)
-        if buf.strip():
-            out.append(buf.decode("utf-8", "replace"))
+                emit(part)
+        emit(buf)   # l'ultima riga senza "a capo" è spesso proprio il messaggio d'errore
         return p.wait(), "\n".join(out)
     finally:
         timer.cancel()
+        p.stdout.close()
 
 
 def set_progress(jid, **kw):
@@ -692,16 +768,22 @@ def cask_catalog():
 
 # ---------------------------------------------------------------- scansione
 
+class ScanError(Exception):
+    pass
+
+
 def scan_brew():
-    items, managed = [], set()
+    """Aggiornamenti di Homebrew. Se brew non risponde è un errore: mai un elenco vuoto per sbaglio."""
+    items = []
     rc, out = run([BREW, "list", "--cask", "-1"], timeout=120)
-    if rc == 0:
-        managed = set(out.split())
+    if rc != 0:
+        raise ScanError(f'{t("scan_brew")}: {out.strip()[-300:]}')
+    managed = set(out.split())
     rc, out = run([BREW, "outdated", "--json=v2", "--greedy"], timeout=300)
     try:
         data = json.loads(out[out.index("{"):])
     except Exception:
-        return items, managed
+        raise ScanError(f'{t("scan_brew")}: {out.strip()[-300:]}')
     for c in data.get("casks", []):
         items.append({
             "id": "cask:" + c["name"], "kind": "cask", "token": c["name"],
@@ -720,10 +802,14 @@ def scan_brew():
 
 
 def scan_mas():
+    """Aggiornamenti dell'App Store; None se mas non ha risposto (elenco forse incompleto)."""
     items = []
     if not os.path.exists(MAS):
         return items
     rc, out = run([MAS, "outdated"], timeout=180)
+    if rc != 0:
+        log_line("mas outdated", rc, out.strip()[-300:])
+        return None
     for line in out.splitlines():
         m = re.match(r"\s*(\d+)\s+(.+?)\s+\((.+?)\s+->\s+(.+?)\)", line)
         if m:
@@ -757,6 +843,8 @@ def sparkle_latest(feed):
 
 def scan_apps(managed_casks):
     catalog = cask_catalog()
+    if not catalog:   # senza catalogo ogni app installata a mano risulterebbe "senza fonte"
+        raise ScanError("catalogo Homebrew non disponibile" if LANG == "it" else "Homebrew catalog unavailable")
     items, sparkle, unchecked = [], [], []
 
     def skip(a, reason):
@@ -865,7 +953,14 @@ def cask_catalog_by_token():
 
 
 def scan_macos():
-    rc, out = run(["softwareupdate", "-l"], timeout=180)
+    """Aggiornamenti di macOS; None se softwareupdate non ha risposto."""
+    try:
+        rc, out = run(["softwareupdate", "-l"], timeout=180)
+    except subprocess.TimeoutExpired:
+        return None
+    if rc != 0:
+        log_line("softwareupdate", rc, out.strip()[-300:])
+        return None
     return [m.group(1).strip() for m in re.finditer(r"Title:\s*([^,]+(?:, Version: [^,]+)?)", out)]
 
 
@@ -902,8 +997,18 @@ def demo_scan():
         state["scanned_at"] = time.time()
 
 
-def demo_update(item):
+def demo_update(item, mode="manual"):
     jid, total = item["id"], 180 * 1048576
+    # in demo Spotify "resta aperta": mostra la scelta tra Forza chiusura e Rimanda
+    if item["name"] == "Spotify" and mode != "force":
+        set_progress(jid, phase="closing", pct=1)
+        time.sleep(1.5)
+        with lock:
+            state["jobs"][jid].update(status="postponed" if mode == "auto" else "blocked",
+                                      log=t("postponed_open" if mode == "auto" else "app_open", x=item["name"]))
+        add_history({"name": item["name"], "from": item["installed"], "to": item["latest"],
+                     "result": state["jobs"][jid]["status"], "mode": mode})
+        return
     steps = 40
     for i in range(1, steps + 1):
         got = total * i // steps
@@ -915,6 +1020,7 @@ def demo_update(item):
     with lock:
         state["jobs"][jid]["status"] = "done"
         state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
+    add_history({"name": item["name"], "from": item["installed"], "to": item["latest"], "result": "done", "mode": mode})
 
 
 def do_scan(force_self_check=False):
@@ -923,7 +1029,14 @@ def do_scan(force_self_check=False):
         return demo_scan()
     _by_token.clear()
     try:
-        run([BREW, "update", "--quiet"], timeout=300, env={**ENV, "HOMEBREW_NO_AUTO_UPDATE": ""})
+        warnings = []
+        try:
+            rc, out = run([BREW, "update", "--quiet"], timeout=300, env={**ENV, "HOMEBREW_NO_AUTO_UPDATE": ""})
+        except subprocess.TimeoutExpired:
+            rc, out = 1, "timeout"
+        if rc != 0:
+            log_line("brew update", rc, out.strip()[-300:])
+            warnings.append("brew_update")   # si usa il catalogo già scaricato: forse non recentissimo
         with cf.ThreadPoolExecutor(3) as ex:
             f_brew = ex.submit(scan_brew)
             f_mas = ex.submit(scan_mas)
@@ -932,25 +1045,29 @@ def do_scan(force_self_check=False):
             mas_items = f_mas.result()
             app_items, unchecked = scan_apps(managed)
             macos = f_os.result()
-        items = brew_items + mas_items + app_items
+        if mas_items is None:
+            warnings.append("mas")
+        if macos is None:
+            warnings.append("softwareupdate")
+        items = brew_items + (mas_items or []) + app_items
         items = attach_paths(items)
         for it in items:
             it["key"] = item_key(it)
         order = {"cask": 0, "adopt": 0, "sparkle": 0, "mas": 0, "formula": 1}
         items.sort(key=lambda i: (order[i["kind"]], i["name"].lower()))
         with lock:
-            state["unchecked"] = unchecked
-            state["macos"] = macos
-            state["items"] = items
-            state["scan_error"] = None
+            state.update(items=items, unchecked=unchecked, macos=macos or [], scan_error=None,
+                         scan_warnings=warnings, scanned_at=time.time(), stale=False)
             state["jobs"] = {k: v for k, v in state["jobs"].items() if v["status"] == "running"}
     except Exception as e:
+        # si tiene l'ultimo elenco valido, segnalato come non aggiornato: mai "tutto aggiornato" per errore
+        log_line("scansione", e)
         with lock:
             state["scan_error"] = str(e)
+            state["stale"] = True
     finally:
         with lock:
             state["scanning"] = False
-            state["scanned_at"] = time.time()
 
 
 # ---------------------------------------------------------------- aggiornamento
@@ -963,11 +1080,50 @@ def running_app(bundle_id):
 
 
 def quit_app(bundle_id):
-    run(["osascript", "-e", f'tell application id "{bundle_id}" to quit'], timeout=30)
+    """Chiede all'app di chiudersi e aspetta fino a 10 secondi. Non forza mai: se l'app resta aperta
+    (per esempio perché chiede di salvare un documento) restituisce "open" e decide l'utente."""
+    try:
+        run(["osascript", "-e", "with timeout of 10 seconds", "-e", f'tell application id "{bundle_id}" to quit',
+             "-e", "end timeout"], timeout=20)
+    except subprocess.TimeoutExpired:
+        pass
     for _ in range(20):
         if not running_app(bundle_id):
-            return
+            return "closed"
         time.sleep(0.5)
+    return "open"
+
+
+def app_pids(path):
+    """Processi avviati dall'eseguibile dentro il pacchetto .app indicato."""
+    if not path:
+        return []
+    prefix = os.path.realpath(path) + "/Contents/MacOS/"
+    rc, out = run(["ps", "-axo", "pid=,comm="], timeout=15)
+    pids = []
+    for line in out.splitlines():
+        pid, _, comm = line.strip().partition(" ")
+        if comm.strip().startswith(prefix) and pid.isdigit():
+            pids.append(int(pid))
+    return pids
+
+
+def force_quit(item):
+    """Chiusura d'autorità, solo quando l'utente la chiede: SIGTERM, poi SIGKILL dopo 5 secondi."""
+    pids = app_pids(item.get("path"))
+    if not pids:
+        return not running_app(item.get("bundle_id"))
+    for sig in (15, 9):
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        for _ in range(10):
+            time.sleep(0.5)
+            if not app_pids(item.get("path")):
+                return True
+    return False
 
 
 def team_id(app):
@@ -1078,35 +1234,46 @@ def install_sparkle(item, log):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def update_one(item):
+def update_one(item, mode="manual"):
+    """Aggiorna un'app. mode: "manual" (dalla pagina), "auto" (di notte: mai chiudere nulla),
+    "force" (l'utente ha chiesto di chiudere d'autorità l'app aperta).
+    Qualunque errore chiude il job con un esito: il programma non resta mai bloccato su "in corso"."""
     if DEMO:
-        return demo_update(item)
+        return demo_update(item, mode)
     jid = item["id"]
     lines = []
 
     def log(text):
-        text = text.rstrip()
+        text = (text or "").rstrip()
         if text.strip():
             lines.append(text)
             with lock:
                 state["jobs"][jid]["log"] = "\n".join(lines)[-6000:]
 
+    status, was_running = "error", False
     bid = item.get("bundle_id")
-    was_running = item["kind"] in ("cask", "adopt", "sparkle") and running_app(bid)
-    if was_running:
-        set_progress(jid, phase="closing", pct=1)
-        log(t("closing", x=item["name"]))
-        quit_app(bid)
-
-    kind, token = item["kind"], item["token"]
-    cmds = {
-        "cask": [BREW, "upgrade", "--cask", "--greedy", token],
-        "formula": [BREW, "upgrade", "--formula", token],
-        "adopt": [BREW, "install", "--cask", "--force", token],
-        "mas": ["sudo", "-A", MAS, "update", token],
-    }
-    ok = False
     try:
+        was_running = item["kind"] in ("cask", "adopt", "sparkle") and running_app(bid)
+        if was_running and mode == "auto":
+            log(t("postponed_open", x=item["name"]))   # di notte un'app aperta si rimanda, sempre
+            was_running, status = False, "postponed"
+            return
+        if was_running:
+            set_progress(jid, phase="closing", pct=1)
+            log(t("closing", x=item["name"]))
+            closed = force_quit(item) if mode == "force" else quit_app(bid) == "closed"
+            if not closed:
+                log(t("app_open", x=item["name"]))
+                was_running, status = False, "blocked"   # la pagina offre "Forza chiusura" o "Rimanda"
+                return
+
+        kind, token = item["kind"], item["token"]
+        cmds = {
+            "cask": [BREW, "upgrade", "--cask", "--greedy", token],
+            "formula": [BREW, "upgrade", "--formula", token],
+            "adopt": [BREW, "install", "--cask", "--force", token],
+            "mas": ["sudo", "-A", MAS, "update", token],
+        }
         if kind == "sparkle":
             ok = install_sparkle(item, log)
         else:
@@ -1119,19 +1286,29 @@ def update_one(item):
             finally:
                 stop.set()
             ok = rc == 0
+        status = "done" if ok else "error"
+        if not ok and "sudo" in "\n".join(lines).lower() and not has_password():
+            log(t("need_pw"))
     except Exception as e:
+        log_line("aggiornamento", jid, e)
         log(str(e))
-
-    if was_running and bid:
-        set_progress(jid, phase="reopening", pct=98)
-        run(["open", "-g", "-b", bid], timeout=30)
-
-    if not ok and "sudo" in "\n".join(lines).lower() and not has_password():
-        log(t("need_pw"))
-    with lock:
-        state["jobs"][jid]["status"] = "done" if ok else "error"
-        if ok:
-            state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
+        status = "error"
+    finally:
+        if was_running and bid:
+            set_progress(jid, phase="reopening", pct=98)
+            try:
+                run(["open", "-g", "-b", bid], timeout=30)
+            except Exception as e:   # l'aggiornamento resta riuscito anche se la riapertura no
+                log(t("reopen_failed", x=str(e)))
+        with lock:
+            state["jobs"][jid]["status"] = status
+            if status == "done":
+                state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
+        try:
+            add_history({"name": item["name"], "from": item.get("installed"), "to": item.get("latest"),
+                         "result": status, "mode": mode})
+        except Exception:
+            pass
 
 
 def human(n):
@@ -1144,10 +1321,9 @@ def human(n):
 def cleanup():
     """Cancella installer scaricati, vecchie versioni e file temporanei. Restituisce i byte liberati."""
     if DEMO:
-        s = load_settings()
-        s["last_cleanup"] = {"at": time.time(), "freed": int(1.8 * 1024 ** 3)}
-        save_settings(s)
-        return s["last_cleanup"]["freed"]
+        freed = int(1.8 * 1024 ** 3)
+        update_settings(lambda st: st.update(last_cleanup={"at": time.time(), "freed": freed}))
+        return freed
     with lock:
         state["cleaning"] = True
     freed = 0
@@ -1170,32 +1346,63 @@ def cleanup():
                     freed += os.path.getsize(f)
                     os.remove(f)
     except Exception as e:
-        print("cleanup:", e, flush=True)
-    s = load_settings()
-    s["last_cleanup"] = {"at": time.time(), "freed": freed}
-    save_settings(s)
-    with lock:
-        state["cleaning"] = False
+        log_line("pulizia", e)
+    finally:
+        with lock:
+            state["cleaning"] = False
+    update_settings(lambda st: st.update(last_cleanup={"at": time.time(), "freed": freed}))
     return freed
 
 
-def do_updates(ids):
-    with lock:
-        todo = [i for i in state["items"] if i["id"] in ids and not i.get("updated")]
-        for i in todo:
-            state["jobs"][i["id"]] = {"status": "queued", "log": "", "phase": None,
-                                      "pct": None, "bytes": None, "total": None}
-        state["batch"] = {"total": len(todo), "done": 0}
-    for item in todo:
+def do_updates(ids, mode="manual"):
+    """Esegue la coda. Lo stato "in corso" viene sempre liberato, anche dopo un errore inatteso.
+    Con "Interrompi" si finisce l'installazione in corso e le successive tornano da fare."""
+    try:
         with lock:
-            state["jobs"][item["id"]].update(status="running", phase="prepare", pct=0)
-        update_one(item)
+            state["stop"] = False
+            todo = [i for i in state["items"] if i["id"] in ids and not i.get("updated")]
+            for i in todo:
+                state["jobs"][i["id"]] = {"status": "queued", "log": "", "phase": None,
+                                          "pct": None, "bytes": None, "total": None}
+            state["batch"] = {"total": len(todo), "done": 0}
+        for n, item in enumerate(todo):
+            with lock:
+                if state["stop"]:
+                    for rest in todo[n:]:
+                        state["jobs"].pop(rest["id"], None)   # torna tra gli aggiornamenti da fare
+                    break
+                state["jobs"][item["id"]].update(status="running", phase="prepare", pct=0)
+            try:
+                update_one(item, mode)
+            except Exception as e:
+                log_line("coda", item["id"], e)
+                with lock:
+                    state["jobs"][item["id"]]["status"] = "error"
+            with lock:
+                state["batch"]["done"] += 1
+        if todo:
+            try:
+                cleanup()
+            except Exception as e:
+                log_line("pulizia", e)
+    finally:
         with lock:
-            state["batch"]["done"] += 1
-    if todo:
-        cleanup()
+            state["running"] = False
+            state["stop"] = False
+            quit_after = state["quit_after"]
+        if quit_after:   # "Esci" chiesto durante un aggiornamento: ci si chiude ora che è finito
+            os._exit(0)
+
+
+def request_quit():
+    """Uscita sicura: se un aggiornamento è in corso si esce alla fine, mai a metà. True se esce ora."""
     with lock:
-        state["running"] = False
+        if state["running"]:
+            state["quit_after"] = True
+            return False
+        state["quitting"] = True   # la pagina lo vede e mostra che il programma è chiuso
+    threading.Timer(1.5, lambda: os._exit(0)).start()
+    return True
 
 
 # ---------------------------------------------------------------- icone
@@ -1243,12 +1450,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def snapshot(self):
         available, method = self_update_available(), install_method()   # prendono il lock da sole
+        history = load_history()[-100:]
         with lock:
             return {
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
                 "scan_error": state["scan_error"], "items": state["items"],
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
-                "cleaning": state["cleaning"],
+                "cleaning": state["cleaning"], "stale": state["stale"],
+                "scan_warnings": state["scan_warnings"], "stopping": state["stop"],
+                "quitting": state["quitting"], "quit_after": state["quit_after"], "history": history,
                 "version": VERSION, "lang": LANG, "demo": DEMO,
                 "self": {**state["self"], "available": available, "method": method},
                 "password": has_password(),
@@ -1287,11 +1497,18 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin and origin not in (f"http://{HOST}:{PORT}", f"http://localhost:{PORT}"):
             return self.send(403, {"error": "forbidden"})
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self.send(400, {"error": "bad length"})
+        if n > 64 * 1024:
+            return self.send(413, {"error": "too large"})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
-            body = {}
+            return self.send(400, {"error": "invalid json"})
+        if not isinstance(body, dict):
+            return self.send(400, {"error": "expected an object"})
         u = urlparse(self.path)
         if u.path == "/api/scan":
             with lock:
@@ -1300,31 +1517,60 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=do_scan, args=(True,), daemon=True).start()
             return self.send(200, self.snapshot())
         if u.path == "/api/update":
-            ids = set(body.get("ids") or [])
+            ids = body.get("ids")
+            if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+                return self.send(400, {"error": "ids must be a list of strings"})
+            ids = set(ids)
             with lock:
                 if state["running"] or state["scanning"] or not ids:
-                    return self.send(409, {"error": "busy"})
+                    return self.send(409, {"error": t("busy")})
                 state["running"] = True
             threading.Thread(target=do_updates, args=(ids,), daemon=True).start()
             return self.send(200, self.snapshot())
+        if u.path == "/api/stop":
+            with lock:
+                if state["running"]:
+                    state["stop"] = True   # finisce l'installazione in corso, salta le successive
+            return self.send(200, self.snapshot())
+        if u.path in ("/api/force", "/api/dismiss"):
+            jid = body.get("id")
+            if not isinstance(jid, str):
+                return self.send(400, {"error": "id must be a string"})
+            with lock:
+                job = state["jobs"].get(jid)
+                if not job or job["status"] not in ("blocked", "postponed", "error"):
+                    return self.send(409, {"error": "not blocked"})
+                if u.path == "/api/dismiss":
+                    state["jobs"].pop(jid, None)   # "Rimanda": torna tra gli aggiornamenti da fare
+                    return self.send(200, self.snapshot())
+                if state["running"] or state["scanning"]:
+                    return self.send(409, {"error": t("busy")})
+                state["running"] = True
+            threading.Thread(target=do_updates, args=({jid}, "force"), daemon=True).start()
+            return self.send(200, self.snapshot())
+        if u.path == "/api/quit":
+            # mai a metà di un aggiornamento: in quel caso si esce appena finisce
+            request_quit()
+            return self.send(200, self.snapshot())
         if u.path == "/api/settings":
-            s = load_settings()
             now = dt.datetime.now()
-            for flag, tkey, dkey in (("daily_check", "check_time", "last_check_day"),
-                                     ("auto_update", "auto_time", "last_auto_day")):
-                changed = False
-                if flag in body and bool(body[flag]) != s[flag]:
-                    s[flag] = bool(body[flag])
-                    changed = True
-                if tkey in body and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(body[tkey])):
-                    changed = changed or s[tkey] != body[tkey]
-                    s[tkey] = body[tkey]
-                if changed:
-                    # se l'orario di oggi è già passato si parte domani, mai subito
-                    h, m = map(int, s[tkey].split(":"))
-                    passed = now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
-                    s[dkey] = now.date().isoformat() if passed else None
-            save_settings(s)
+
+            def change(s):
+                for flag, tkey, dkey in (("daily_check", "check_time", "last_check_day"),
+                                         ("auto_update", "auto_time", "last_auto_day")):
+                    changed = False
+                    if flag in body and bool(body[flag]) != s[flag]:
+                        s[flag] = bool(body[flag])
+                        changed = True
+                    if tkey in body and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(body[tkey])):
+                        changed = changed or s[tkey] != body[tkey]
+                        s[tkey] = body[tkey]
+                    if changed:
+                        # se l'orario di oggi è già passato si parte domani, mai subito
+                        h, m = map(int, s[tkey].split(":"))
+                        passed = now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+                        s[dkey] = now.date().isoformat() if passed else None
+            update_settings(change)
             if "login" in body:
                 set_login(bool(body["login"]))
             return self.send(200, self.snapshot())
@@ -1364,13 +1610,13 @@ class Handler(BaseHTTPRequestHandler):
             key = str(body.get("key") or "")
             if not key:
                 return self.send(400, {"error": "chiave mancante"})
-            with lock:
+            with files_lock:
                 excluded = load_excluded()
                 if body.get("exclude"):
                     excluded[key] = {
                         "name": str(body.get("name") or key),
-                        "path": body.get("path") or None,
-                        "kind": body.get("kind") or None,
+                        "path": str(body.get("path") or "") or None,
+                        "kind": str(body.get("kind") or "") or None,
                         "since": time.time(),
                     }
                 else:
@@ -1379,6 +1625,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, self.snapshot())
         if u.path == "/api/password":
             pw = body.get("password") or ""
+            if not isinstance(pw, str):
+                return self.send(400, {"error": "password must be a string"})
             if not pw:
                 run(["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE], timeout=10)
                 return self.send(200, self.snapshot())

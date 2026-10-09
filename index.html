@@ -70,7 +70,7 @@
   .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; margin-left: 8px; vertical-align: 1px; font-weight: 400; }
   .status { font-size: 13px; color: var(--muted); text-align: right; min-width: 80px; }
   .status.done { color: var(--ok); }
-  .status.error { color: var(--err); cursor: pointer; }
+  .status.error { color: var(--err); }
   li.done .name, li.done .meta { opacity: .5; }
 
   input[type=checkbox] {
@@ -94,10 +94,21 @@
   .overall { margin: -12px 0 36px; }
   .overall .phase { margin-top: 8px; }
 
-  .act { font-size: 12px; color: var(--muted); margin-left: 12px; opacity: 0; transition: opacity .15s; cursor: pointer; }
-  .act:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
-  .row:hover .act { opacity: 1; }
-  @media (hover: none) { .act { opacity: 1; } }
+  .act { font: inherit; font-size: 12px; color: var(--muted); margin-left: 12px; opacity: .55; transition: opacity .15s; cursor: pointer;
+         background: none; border: 0; padding: 2px 4px; border-radius: 4px; }
+  .act:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; background: none !important; }
+  .row:hover .act, .act:focus-visible { opacity: 1; }
+  .act:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .mini { font-size: 12px; padding: 4px 10px; margin: 6px 0 0 6px; }
+  .status .details { color: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; margin-left: 6px; }
+  .status.blocked, .status.postponed { color: var(--muted); }
+  .warn-line { color: var(--err); font-size: 13px; margin: -28px 0 24px; }
+  .gone { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 20; padding: 16px; }
+  .gone .card { background: var(--bg); border: 1px solid var(--line); border-radius: 18px; padding: 32px; max-width: 460px; text-align: center; }
+  .gone h2 { font-size: 22px; color: var(--fg); text-transform: none; letter-spacing: 0; margin: 0 0 10px; }
+  .gone p { color: var(--muted); margin: 0; }
+  .history li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 4px; font-size: 13px; color: var(--muted); }
+  .version a.quit { margin-left: 2px; }
   .row.static { cursor: default; }
   .row.static:hover { background: transparent; }
   details.excluded { margin-top: 48px; }
@@ -215,6 +226,7 @@
     <p class="version" id="version"></p>
   </footer>
 </main>
+<div id="gone"></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -229,7 +241,21 @@ const I18N = {
   it: {
     title: "Aggiornamenti", check: "Controlla", update: "Aggiorna", updateAll: "Aggiorna tutto", updateN: n => `Aggiorna (${n})`,
     scanning: "Controllo in corso…", cleaning: "Pulizia della cache…", updating: "Aggiornamento in corso…", error: "Errore: ",
-    allUpToDate: "Tutto aggiornato", noneNeeded: "Nessuna app ha bisogno di aggiornamenti.",
+    allUpToDate: "Nessun aggiornamento", noneNeeded: "Nessun aggiornamento disponibile per le app controllate. Quelle che il programma non sa controllare sono in fondo, in Non controllate.",
+    interrupt: "Interrompi", stopping: "Mi fermo dopo l'installazione in corso…",
+    blocked: "Non si chiude da sola", force: "Forza chiusura", postpone: "Rimanda", postponed: "Rimandata",
+    forceConfirm: n => `Chiudere d'autorità ${n}? Eventuali modifiche non salvate in ${n} andranno perse.`,
+    details: "Dettagli",
+    staleErr: (m, a) => `Controllo non riuscito (${m}). Mostro l'ultimo elenco valido${a ? ", del " + a : ""}.`,
+    warns: { brew_update: "Il catalogo Homebrew non si è aggiornato: alcune versioni nuove potrebbero mancare.",
+             mas: "L'App Store non ha risposto: i suoi aggiornamenti non sono stati verificati.",
+             softwareupdate: "Aggiornamento Software non ha risposto: gli aggiornamenti di macOS non sono stati verificati." },
+    goneTitle: "Aggiornamenti è stato chiuso", goneText: "Questa pagina mostra dati non più aggiornati. Per riaprire il programma usa l'app Aggiornamenti sulla Scrivania o il comando aggiornamenti nel Terminale.",
+    history: "Storico", actionFailed: "Operazione non riuscita: ",
+    quit: "Esci", quitConfirm: "Chiudere Aggiornamenti? Il controllo automatico si ferma finché non lo riapri.",
+    quitLater: "Esco appena finisce l'aggiornamento in corso…",
+    loginOffHint: "Avvio all'accesso spento: Aggiornamenti funziona solo quando lo apri tu, e con Esci si chiude del tutto.",
+    res: { done: "aggiornata", error: "non riuscita", blocked: "non chiusa", postponed: "rimandata" },
     available: n => n === 1 ? "1 aggiornamento disponibile" : `${n} aggiornamenti disponibili`,
     now: "adesso", minAgo: n => `${n} min fa`, of: "di",
     selectAll: "Seleziona tutto", apps: "Applicazioni", cli: "Strumenti da riga di comando",
@@ -271,7 +297,21 @@ const I18N = {
   en: {
     title: "Aggiornamenti", check: "Check", update: "Update", updateAll: "Update all", updateN: n => `Update (${n})`,
     scanning: "Checking…", cleaning: "Cleaning the cache…", updating: "Updating…", error: "Error: ",
-    allUpToDate: "Everything is up to date", noneNeeded: "No app needs updating.",
+    allUpToDate: "No updates", noneNeeded: "No updates for the apps that were checked. The ones the program cannot check are listed at the bottom, under Not checked.",
+    interrupt: "Stop", stopping: "Stopping after the current installation…",
+    blocked: "Won't quit by itself", force: "Force quit", postpone: "Postpone", postponed: "Postponed",
+    forceConfirm: n => `Force ${n} to quit? Any unsaved changes in ${n} will be lost.`,
+    details: "Details",
+    staleErr: (m, a) => `Check failed (${m}). Showing the last valid list${a ? ", from " + a : ""}.`,
+    warns: { brew_update: "The Homebrew catalog did not refresh: some new versions may be missing.",
+             mas: "The App Store did not respond: its updates were not checked.",
+             softwareupdate: "Software Update did not respond: macOS updates were not checked." },
+    goneTitle: "Aggiornamenti has been closed", goneText: "This page shows stale data. To reopen the program use the Aggiornamenti app on the Desktop or the aggiornamenti command in Terminal.",
+    history: "History", actionFailed: "Action failed: ",
+    quit: "Quit", quitConfirm: "Quit Aggiornamenti? Automatic checks stop until you open it again.",
+    quitLater: "Quitting as soon as the current update finishes…",
+    loginOffHint: "Start at login is off: Aggiornamenti only runs when you open it, and Quit closes it completely.",
+    res: { done: "updated", error: "failed", blocked: "not quit", postponed: "postponed" },
     available: n => n === 1 ? "1 update available" : `${n} updates available`,
     now: "just now", minAgo: n => `${n} min ago`, of: "of",
     selectAll: "Select all", apps: "Applications", cli: "Command-line tools",
@@ -409,6 +449,7 @@ const isEx = i => i.key in excluded();
 function pending() { return data.items.filter(i => !i.updated); }
 let exOpen = false;
 let unOpen = false;
+let histOpen = false;
 
 function iconHtml(path, kind) {
   return path
@@ -419,16 +460,19 @@ function iconHtml(path, kind) {
 function rowHtml(i, busy, ex) {
   const job = data.jobs[i.id];
   const st = i.updated ? "done" : job?.status;
+  const det = job?.log ? ` <a class="details" data-details="${esc(i.id)}" href="#">${L.details}</a>` : "";
   const status =
-    st === "done" ? L.done :
+    st === "done" ? L.done + det :
     st === "running" ? (job.pct !== null && job.pct !== undefined ? "" : '<span class="spin"></span>') :
     st === "queued" ? "" :
-    st === "error" ? L.failed : "";
-  const act = busy || st === "running" || st === "queued" ? "" :
-    `<span class="act" data-act="${ex ? "include" : "exclude"}">${ex ? L.include : L.exclude}</span>`;
+    st === "error" ? L.failed + det :
+    st === "blocked" ? `${L.blocked}${det}<br><button type="button" class="mini" data-force="${esc(i.id)}" ${busy ? "disabled" : ""}>${L.force}</button><button type="button" class="mini" data-dismiss="${esc(i.id)}">${L.postpone}</button>` :
+    st === "postponed" ? L.postponed + det : "";
+  const act = busy || st === "running" || st === "queued" || st === "blocked" ? "" :
+    `<button type="button" class="act" data-act="${ex ? "include" : "exclude"}">${ex ? L.include : L.exclude}</button>`;
   return `<li class="${st === "done" ? "done" : ""}">
     <div class="row" data-id="${esc(i.id)}" data-key="${esc(i.key)}">
-      <input type="checkbox" ${selected.has(i.id) ? "checked" : ""} ${busy || i.updated ? "disabled" : ""}>
+      <input type="checkbox" aria-label="${esc(i.name)}" ${selected.has(i.id) ? "checked" : ""} ${busy || i.updated ? "disabled" : ""}>
       ${iconHtml(i.path, i.kind)}
       <div style="min-width:0">
         <div class="name">${esc(i.name)}${i.major ? `<span class="tag">${L.major}</span>` : ""}${i.verified === false ? `<span class="tag">${L.unverified}</span>` : ""}</div>
@@ -454,7 +498,7 @@ function renderSettings() {
   $("#autodot").className = "dot" + (on && st.login ? " on" : "");
   $("#autolabel").textContent = !on ? L.autoOff : st.auto_update ? L.autoNightly(st.auto_time) : L.autoDaily(st.check_time);
   const hint = $("#loginhint");
-  hint.textContent = on && !st.login ? L.loginWarn : "";
+  hint.textContent = on && !st.login ? L.loginWarn : !on && !st.login ? L.loginOffHint : "";
   hint.className = "hint" + (on && !st.login ? " warn" : "");
   const lc = st.last_cleanup;
   $("#lastclean").textContent = data.cleaning ? L.cleanRunning : L.cleanInfo + (lc ? " " + L.cleanLast(ago(lc.at), size(lc.freed)) : "");
@@ -511,8 +555,10 @@ function render() {
     : data.cleaning ? `<span class="spin"></span>${L.cleaning}`
     : data.self && data.self.status === "updating" ? `<span class="spin"></span>${L.selfUpdating(esc(data.self.available || ""))}`
     : data.self && data.self.status === "restarting" ? `<span class="spin"></span>${L.selfRestarting}`
+    : data.quit_after ? `<span class="spin"></span>${L.quitLater}`
+    : data.stopping ? `<span class="spin"></span>${L.stopping}`
     : data.running ? L.updating
-    : data.scan_error ? L.error + esc(data.scan_error)
+    : data.scan_error ? esc(L.staleErr(data.scan_error, data.scanned_at ? ago(data.scanned_at) : ""))
     : todo.length === 0 ? `${L.allUpToDate} · ${ago(data.scanned_at)}`
     : `${L.available(todo.length)} · ${ago(data.scanned_at)}`;
 
@@ -520,16 +566,18 @@ function render() {
   $("#scan").disabled = busy;
   const n = selected.size;
   const nMain = todo.filter(i => selected.has(i.id)).length;
-  $("#go").disabled = busy || n === 0;
-  $("#go").textContent = n && n === todo.length && nMain === n ? L.updateAll : n ? L.updateN(n) : L.update;
+  const updatingApps = data.running && data.batch && !data.cleaning && !(data.self && data.self.status);
+  // durante un giro il pulsante diventa "Interrompi": finisce l'installazione in corso e salta le altre
+  $("#go").disabled = updatingApps ? !!data.stopping : (busy || n === 0);
+  $("#go").textContent = updatingApps ? L.interrupt : n && n === todo.length && nMain === n ? L.updateAll : n ? L.updateN(n) : L.update;
 
   if (data.version)
-    $("#version").innerHTML = `${data.demo ? esc(L.demo) + " · " : ""}${L.version} ${esc(data.version)} · <a href="https://github.com/giuseppelupo1979/aggiornamenti-mac/blob/main/CHANGELOG.md" target="_blank" rel="noopener">${L.news}</a>`;
+    $("#version").innerHTML = `${data.demo ? esc(L.demo) + " · " : ""}${L.version} ${esc(data.version)} · <a href="https://github.com/giuseppelupo1979/aggiornamenti-mac/blob/main/CHANGELOG.md" target="_blank" rel="noopener">${L.news}</a> · <a href="#" class="quit" id="quit">${L.quit}</a>`;
   renderSettings();
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
   $("#pwlabel").textContent = data.password ? L.pwSet : L.pwUnset;
 
-  const sig = JSON.stringify([lang, data.self && [data.self.available, data.self.status, selfLogOpen], busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
+  const sig = JSON.stringify([lang, data.stale, (data.scan_warnings || []).join(), (data.history || []).length, histOpen, data.self && [data.self.available, data.self.status, selfLogOpen], busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
     const j = data.jobs[i.id];
     return [i.id, i.updated, j?.status, openLogs.has(i.id) ? j?.log : ""];
   })]);
@@ -537,11 +585,14 @@ function render() {
   lastSig = sig;
 
   let html = selfBanner();
+  const warns = data.scan_warnings || [];
+  if (!data.scan_error && warns.length)
+    html += `<p class="warn-line">${warns.map(w => L.warns[w] || w).join(" ")}</p>`;
   if (data.macos && data.macos.length) {
     html += `<div class="notice"><div><div class="name">${L.macos}</div><div class="meta">${data.macos.map(esc).join(" · ")}</div></div><button type="button" id="openSU">${L.openSettings}</button></div>`;
   }
   if (!main.length) {
-    html += data.scanning ? "" : `<div class="empty"><strong>${L.allUpToDate}</strong>${L.noneNeeded}</div>`;
+    html += data.scanning || data.scan_error ? "" : `<div class="empty"><strong>${L.allUpToDate}</strong>${L.noneNeeded}</div>`;
   } else {
     html += `<div class="bar"><label><input type="checkbox" id="all" ${todo.length && nMain === todo.length ? "checked" : ""} ${busy || !todo.length ? "disabled" : ""}> ${L.selectAll}</label><span>${nMain} ${L.of} ${todo.length}</span></div>`;
     const groups = [
@@ -566,7 +617,7 @@ function render() {
       html += `<li><div class="row static" data-key="${esc(key)}">
         <span></span>${iconHtml(info.path, info.kind)}
         <div style="min-width:0"><div class="name">${esc(info.name)}</div><div class="meta">${data.scanning ? L.scanning : L.noUpdate}</div></div>
-        <div class="status">${busy ? "" : `<span class="act" data-act="include">${L.include}</span>`}</div>
+        <div class="status">${busy ? "" : `<button type="button" class="act" data-act="include">${L.include}</button>`}</div>
       </div></li>`;
     }
     html += "</ul></details>";
@@ -588,10 +639,19 @@ function render() {
     }
     html += "</ul></details>";
   }
+  const hist = (data.history || []).slice().reverse();
+  if (hist.length && !data.scanning) {
+    html += `<details class="excluded hist" ${histOpen ? "open" : ""}><summary>${L.history} · ${hist.length}</summary><ul class="history">`;
+    for (const h of hist)
+      html += `<li><span>${esc(h.name)} ${esc(h.from || "")} → ${esc(h.to || "")}</span><span>${esc(L.res[h.result] || h.result)} · ${ago(h.at)}</span></li>`;
+    html += "</ul></details>";
+  }
   $("#list").innerHTML = html;
+  const hDet = $("#list details.hist");
+  if (hDet) hDet.addEventListener("toggle", () => { histOpen = hDet.open; });
   const unDet = $("#list details.unchecked");
   if (unDet) unDet.addEventListener("toggle", () => { unOpen = unDet.open; });
-  const det = $("#list details.excluded:not(.unchecked)");
+  const det = $("#list details.excluded:not(.unchecked):not(.hist)");
   if (det) det.addEventListener("toggle", () => { exOpen = det.open; });
 }
 
@@ -607,6 +667,16 @@ $("#list").addEventListener("click", async e => {
     if (e.target.checked) main.forEach(i => selected.add(i.id)); else main.forEach(i => selected.delete(i.id));
     return render();
   }
+  const d = e.target.closest("[data-details]");
+  if (d) { e.preventDefault(); const id = d.dataset.details; openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id); return render(); }
+  const f = e.target.closest("[data-force]");
+  if (f) {
+    const it = data.items.find(i => i.id === f.dataset.force);
+    if (!confirm(L.forceConfirm(it ? it.name : ""))) return;
+    return act("/api/force", { id: f.dataset.force });
+  }
+  const dm = e.target.closest("[data-dismiss]");
+  if (dm) return act("/api/dismiss", { id: dm.dataset.dismiss });
   const actEl = e.target.closest("[data-act]");
   if (actEl) {
     e.stopPropagation();
@@ -615,28 +685,35 @@ $("#list").addEventListener("click", async e => {
     const exclude = actEl.dataset.act === "exclude";
     const it = data.items.find(i => i.key === key);
     if (exclude && it) selected.delete(it.id);
-    data = await api("/api/exclude", { key, exclude, name: it?.name, path: it?.path, kind: it?.kind });
-    return render();
+    return act("/api/exclude", { key, exclude, name: it?.name, path: it?.path, kind: it?.kind });
   }
   const row = e.target.closest(".row");
   if (!row || row.classList.contains("static")) return;
   const id = row.dataset.id;
-  const job = data.jobs[id];
-  if (job && (job.status === "error" || e.target.closest(".status"))) {
-    openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
-    return render();
-  }
+  // la colonna di stato ha i suoi comandi: non seleziona la riga
+  if (e.target.closest(".status")) return;
   const cb = row.querySelector("input");
   if (cb.disabled) return;
   selected.has(id) ? selected.delete(id) : selected.add(id);
   render();
 });
 
-$("#scan").onclick = async () => { firstLoad = true; data = await api("/api/scan", {}); render(); };
-$("#go").onclick = async () => {
-  try { data = await api("/api/update", { ids: [...selected] }); } catch (e) { alert(e.message); }
+// ogni azione mostra l'errore invece di fallire in silenzio
+async function act(path, body) {
+  try { data = await api(path, body); }
+  catch (err) { alert(L.actionFailed + (err.message === "Failed to fetch" || err.message === "Load failed" ? L.goneTitle : err.message)); }
   render();
+}
+$("#scan").onclick = () => { firstLoad = true; return act("/api/scan", {}); };
+$("#go").onclick = () => {
+  if (data.running && data.batch) return act("/api/stop", {});
+  return act("/api/update", { ids: [...selected] });
 };
+$("#version").addEventListener("click", e => {
+  if (e.target.id !== "quit") return;
+  e.preventDefault();
+  if (confirm(L.quitConfirm)) act("/api/quit", {});
+});
 
 $("#pwform").onsubmit = async e => {
   e.preventDefault();
@@ -657,6 +734,7 @@ $("#pwdel").onclick = async () => {
 applyStatic();
 let langFromServer = false;
 let startVersion = null;
+let offline = 0;
 async function poll() {
   try {
     data = await api("/api/state");
@@ -665,10 +743,23 @@ async function poll() {
     startVersion = startVersion || data.version;
     // la lingua del Mac (dal server) prevale su quella del browser
     if (!langFromServer && data.lang) { setLang(data.lang); applyStatic(); langFromServer = true; }
-    render();
-  } catch {}
+    offline = 0;
+    // Esci: il programma avvisa prima di chiudersi; se viene riaperto la pagina torna da sola
+    if (data.quitting) showGone();
+    else { $("#gone").innerHTML = ""; render(); }
+  } catch {
+    // il programma non risponde più (chiuso con Esci o fermato): mai una pagina che sembra
+    // funzionare con dati vecchi
+    offline++;
+    if (offline >= 2 && !(data.self && data.self.status === "restarting")) showGone();
+  }
   const selfBusy = data.self && (data.self.status === "updating" || data.self.status === "restarting");
-  setTimeout(poll, data.running || selfBusy ? 500 : data.scanning ? 1000 : 5000);
+  setTimeout(poll, data.running || selfBusy ? 500 : data.scanning ? 1000 : 3000);
+}
+function showGone() {
+  if ($("#gone").innerHTML) return;
+  $("#gone").innerHTML = `<div class="gone" role="alertdialog" aria-labelledby="goneT"><div class="card">
+    <h2 id="goneT">${L.goneTitle}</h2><p>${L.goneText}</p></div></div>`;
 }
 poll();
 </script>

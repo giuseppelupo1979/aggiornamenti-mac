@@ -84,7 +84,9 @@ Demo mode shows sample apps and simulates updates on a separate port. It changes
 In the page:
 
 - **Click a row** to select it, or use **Select all**, then press **Update**. Apps flagged *major version* or *unverified* are never preselected.
-- **Hover a row** and click **Exclude** to move an app to the *Excluded* section.
+- **Exclude**, next to each row, moves an app to the *Excluded* section.
+- While updates run, the button becomes **Stop**: the current installation finishes and the rest are left for later. Every update ends up in the **History** section.
+- **Quit**, next to the version at the bottom, closes the program (after the current update, never halfway).
 - **Automatic check** (at the bottom): daily check time, nightly updates and *start at login*. Turn on *start at login*, because the schedule only runs while the server is running.
 - **Administrator password** (optional): App Store updates and `.pkg` installers need admin rights. Without the password, everything else still works.
 
@@ -116,6 +118,8 @@ This tool replaces apps and can run installers as administrator, so here is exac
 - **Apps you installed by hand become managed by Homebrew** after their first update through this tool (`brew install --cask --force` replaces the existing copy). From then on Homebrew keeps them up to date. If you would rather not, exclude those apps.
 - **Sparkle downloads are verified.** An app or `.pkg` is installed only if its code signature is valid and comes from the same developer (Team ID) as the version already installed.
 - **Nightly updates are conservative.** Only apps that are not excluded are updated, major versions and unverified matches are skipped, and open apps are never quit.
+- **No app is force-quit without your consent.** If an app does not quit by itself (for example because it asks to save a document), its row offers *Force quit* or *Postpone* and you decide.
+- **No false "up to date".** If Homebrew does not respond, the page says so and keeps showing the last valid list.
 
 ## Limitations
 

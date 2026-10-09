@@ -43,11 +43,15 @@ Gli aggiornamenti vengono eseguiti uno alla volta. In alto compare una barra gen
 - **Sostituzione della versione precedente**;
 - **Rifinitura**, poi la riga diventa *Aggiornata*.
 
-Se l'app era aperta vedrai anche *Chiusura* all'inizio e *Riapertura* alla fine. Se un'app è aperta, viene chiusa con garbo, aggiornata e riaperta in background. Puoi chiudere la pagina durante gli aggiornamenti: il lavoro continua e ritrovi lo stato quando la riapri.
+Durante il giro il pulsante **Aggiorna** diventa **Interrompi**: il programma finisce l'installazione in corso (fermarla a metà lascerebbe l'app danneggiata) e lascia le altre per dopo, di nuovo selezionabili.
 
-Se una riga finisce in **Non riuscito**, cliccaci sopra per leggere il dettaglio.
+Se un'app da aggiornare è aperta, il programma le chiede di chiudersi (vedrai *Chiusura dell'app*), la aggiorna e la riapre in background (*Riapertura dell'app*). Se non si chiude entro qualche secondo, per esempio perché chiede di salvare un documento, **non la forza**: la riga mostra *Non si chiude da sola* con due pulsanti. **Forza chiusura** la chiude d'autorità, dopo una conferma, perché eventuali modifiche non salvate andrebbero perse; **Rimanda** la rimette tra gli aggiornamenti da fare. Puoi anche salvare il lavoro, chiudere l'app tu e premere di nuovo Aggiorna.
 
-**Controlla** ripete la ricerca da capo.
+Puoi chiudere la pagina durante gli aggiornamenti: il lavoro continua e ritrovi lo stato quando la riapri.
+
+Se una riga finisce in **Non riuscito**, clicca **Dettagli** accanto per leggere il motivo. Ogni aggiornamento, riuscito o no, finisce nello **Storico** in fondo alla pagina, con versione di partenza, versione nuova ed esito.
+
+**Controlla** ripete la ricerca da capo. Se il controllo non riesce (per esempio senza rete o con Homebrew che non risponde), il sottotitolo lo dice e la pagina mostra l'ultimo elenco valido: non scrive mai "nessun aggiornamento" per errore. Se invece non risponde solo una fonte secondaria (App Store, Aggiornamento Software, aggiornamento del catalogo Homebrew), sopra l'elenco compare una riga rossa che dice quale.
 
 ## Spazio su disco
 
@@ -57,7 +61,7 @@ In **Controllo automatico** trovi quanto spazio ha liberato l'ultima pulizia e i
 
 ## Escludere un'app
 
-Passando con il mouse su una riga compare a destra **Escludi**. L'app sparisce dall'elenco principale: non viene più contata, non viene selezionata in automatico e non rientra in **Aggiorna tutto**. Utile per le app che vuoi tenere a una versione precisa, quelle con licenza legata alla versione o i falsi aggiornamenti.
+A destra di ogni riga c'è **Escludi**. L'app sparisce dall'elenco principale: non viene più contata, non viene selezionata in automatico e non rientra in **Aggiorna tutto**. Utile per le app che vuoi tenere a una versione precisa, quelle con licenza legata alla versione o i falsi aggiornamenti.
 
 Le app escluse finiscono in fondo alla pagina, nella sezione chiusa **Escluse**. Il titolo dice quante sono e quante hanno un aggiornamento disponibile. Aprila solo quando ti serve: da lì puoi selezionare un'app esclusa e aggiornarla lo stesso con il pulsante **Aggiorna**, oppure riportarla nell'elenco principale con **Includi**.
 
@@ -69,11 +73,13 @@ In fondo alla pagina apri **Controllo automatico**. Le opzioni sono tre.
 
 **Controlla ogni giorno alle…** (attiva di serie, alle 9:00): a quell'ora il programma cerca gli aggiornamenti e, se ne trova, ti manda una notifica di macOS con il numero e i primi nomi. Un clic sulla notifica apre la pagina. La prima volta macOS potrebbe chiederti di consentire le notifiche: accetta, altrimenti non le vedrai. Il pulsante **Prova una notifica** serve proprio a controllarlo.
 
-**Aggiorna da solo ogni notte alle…** (spenta di serie): a quell'ora il programma controlla e aggiorna senza chiederti nulla, poi ti lascia una notifica con il resoconto. Per prudenza tocca solo le app non escluse, salta le versioni maggiori e gli abbinamenti da verificare, e non chiude mai un'app aperta: se la stai usando la rimanda alla notte dopo. Sotto le opzioni trovi l'esito dell'ultimo giro automatico.
+**Aggiorna da solo ogni notte alle…** (spenta di serie): a quell'ora il programma controlla e aggiorna senza chiederti nulla, poi ti lascia una notifica con il resoconto. Per prudenza tocca solo le app non escluse, salta le versioni maggiori e gli abbinamenti da verificare, e non chiude mai un'app aperta: ogni app viene ricontrollata un attimo prima della sua installazione e, se la stai usando, rimandata alla notte dopo. Se il controllo notturno non riesce, non aggiorna nulla alla cieca. Sotto le opzioni trovi l'esito dell'ultimo giro automatico.
 
-**Avvia Aggiornamenti all'accesso**: perché i controlli pianificati funzionino il programma deve essere attivo. Con questa opzione parte da solo a ogni accesso al Mac, in silenzio, senza aprire finestre. Finché è spenta, la pagina mostra un avviso in rosso.
+**Avvia Aggiornamenti all'accesso**: perché i controlli pianificati funzionino il programma deve essere attivo. Con questa opzione parte da solo a ogni accesso al Mac, in silenzio, senza aprire finestre. Finché è spenta e un controllo è pianificato, la pagina mostra un avviso in rosso.
 
-Se il Mac dorme all'ora prevista, il controllo parte appena si risveglia. Se imposti un orario già passato oggi, il primo giro sarà domani.
+Se il Mac dorme all'ora prevista, il controllo giornaliero parte appena si risveglia. L'aggiornamento notturno invece recupera solo entro cinque ore dall'orario scelto (con le 3:00, fino alle 8:00): se il Mac resta spento, si riprova la notte dopo, così non si ritrova a chiudere e aggiornare app a metà giornata. Se il programma è occupato all'ora prevista, la giornata non viene considerata fatta e si riprova poco dopo. Se imposti un orario già passato oggi, il primo giro sarà domani.
+
+**Solo quando lo apri tu.** Spegnendo entrambe le opzioni e l'avvio all'accesso, Aggiornamenti funziona solo quando lo apri. In fondo alla pagina, accanto alla versione, **Esci** lo chiude del tutto: se un aggiornamento è in corso aspetta che finisca, mai a metà. La pagina rimasta aperta mostra *Aggiornamenti è stato chiuso* invece di dati vecchi, e torna normale da sola quando lo riapri dall'app sulla Scrivania o con il comando `aggiornamenti`.
 
 ## App non controllate
 

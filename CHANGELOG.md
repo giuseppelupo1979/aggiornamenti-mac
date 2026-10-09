@@ -2,6 +2,31 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.9.0] - 2026-10-09
+
+Porta sul Mac le correzioni e le novità nate con la versione per Windows (0.3.0), dalla revisione indipendente del codice e dai suggerimenti di chi la sta provando.
+
+### Aggiunto
+- **Interrompi:** durante un giro di aggiornamenti il pulsante Aggiorna diventa Interrompi. L'installazione in corso finisce (fermarla a metà danneggerebbe l'app), le altre tornano da fare.
+- **Forza chiusura / Rimanda:** se un'app aperta non si chiude da sola entro 10 secondi (per esempio perché chiede di salvare un documento), non viene più aggiornata comunque: la riga mostra "Non si chiude da sola" e decidi tu. Forza chiusura chiede conferma.
+- **Storico** degli aggiornamenti in fondo alla pagina (ultimi 300, in `storico.json`), con versioni ed esito.
+- **Esci** in fondo alla pagina: chiude il programma, ma se un aggiornamento è in corso aspetta che finisca. La pagina rimasta aperta mostra "Aggiornamenti è stato chiuso" invece di dati vecchi, anche quando il server viene fermato in altro modo, e torna normale quando lo riapri. Con avvio all'accesso e controlli spenti il programma funziona solo quando lo apri tu.
+- Link **Dettagli** accanto all'esito di ogni riga; Escludi sempre visibile e raggiungibile da tastiera.
+- Test automatici (`tests/`, 20 prove con i comandi di sistema simulati) che girano su GitHub Actions a ogni push, più una prova della modalità demo.
+
+### Corretto
+- **Falso "tutto aggiornato":** se Homebrew non rispondeva, l'elenco risultava vuoto. Ora il controllo fallito lo dice e la pagina mostra l'ultimo elenco valido; App Store, Aggiornamento Software e aggiornamento del catalogo che non rispondono compaiono come avviso.
+- Un errore inatteso durante un aggiornamento poteva lasciare il programma bloccato su "Aggiornamento in corso" fino al riavvio. Ora ogni installazione chiude sempre con un esito.
+- Un'app che mostrava una domanda alla chiusura poteva bloccare la richiesta per minuti e far fallire l'intero giro.
+- Di notte un'app aperta dopo il controllo iniziale veniva chiusa: ora ogni app si ricontrolla un attimo prima della sua installazione e, se aperta, si rimanda.
+- L'aggiornamento notturno recuperava a qualsiasi ora del giorno dopo il risveglio del Mac: ora solo entro 5 ore dall'orario scelto. Se il programma è occupato all'ora prevista la giornata non viene più segnata come fatta.
+- Il controllo giornaliero fallito non manda più notifiche e si ripete.
+- L'auto-aggiornamento da una copia git installava l'ultimo stato del ramo invece della versione pubblicata: ora installa il tag della Release.
+- L'ultima riga dell'output di un comando, spesso proprio il messaggio d'errore, poteva mancare nei Dettagli.
+- Impostazioni, esclusioni e storico non si sovrascrivono più a vicenda quando due operazioni scrivono insieme; un file rovinato non blocca il programma.
+- Le richieste alla pagina con dati malformati vengono rifiutate con un errore chiaro (limite 64 KB).
+- Il messaggio "Tutto aggiornato" ora dice "Nessun aggiornamento" e ricorda le app che il programma non sa controllare.
+
 ## [1.8.2] - 2026-10-09
 
 ### Corretto
