@@ -2,6 +2,32 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.10.0] - 2026-10-11
+
+Porta su macOS le dieci migliorie della versione Windows 0.4.0.
+
+### Aggiunto
+- **Verifica dopo l’installazione:** legge versione e build dal bundle dell’app, dalla ricevuta locale Homebrew o da `mas list`. Un comando riuscito senza versione confermata termina con **Da verificare**, non con Aggiornata. Gli installer `.pkg` gestiti direttamente via Sparkle segnalano le richieste di riavvio/uscita dalla sessione dichiarate dal pacchetto, senza eseguirle.
+- **Condizioni per gli aggiornamenti automatici:** solo con alimentazione esterna e senza hotspot/reti in modalità Consumo limitato, attive di serie. macOS comunica lo stato della rete tramite Network.framework, senza nuove dipendenze. Se una condizione non è verificabile si rimanda; la pagina mostra motivo e prossimo tentativo. Gli aggiornamenti manuali restano disponibili.
+- **Rimanda** per 24 ore o una settimana, **Salta questa versione**, **Riprendi** e sezione separata Rimandate. I rinvii sopravvivono al riavvio e restano distinti dalle esclusioni permanenti.
+- **Storico dettagliato** degli ultimi 300 tentativi, filtri per app ed esito, versione rilevata, codice di uscita e log. Esportazione JSON locale con oscuramento dei percorsi utente, email, URL e credenziali riconoscibili.
+- **Tema** Come macOS, Chiaro o Scuro, salvato nelle impostazioni; focus da tastiera, selezione parziale, etichette accessibili e rispetto di Riduci movimento.
+
+### Interfaccia
+- Accento blu per le azioni, verde per gli esiti riusciti e ambra per le verifiche richieste.
+- Pannelli per elenco, storico e impostazioni; versioni e fonti con gerarchia più leggibile.
+- Righe selezionate evidenziate e caselle quadrate con angoli arrotondati.
+- Intestazione compatta sempre visibile con **Aggiorna N app**; disposizione adattata alle finestre strette.
+
+### Corretto
+- Recupero notturno entro cinque ore anche quando la finestra attraversa mezzanotte; nuovi tentativi ogni cinque minuti se mancano le condizioni o la scansione fallisce.
+- Lo storico resta aperto durante il cambio dei filtri; il focus segue i comandi dopo il ridisegno.
+- Validazione delle impostazioni e rifiuto delle selezioni vecchie o rimandate; rimossa una possibilità di blocco del comando Rimanda dopo una mancata chiusura.
+- Cache demo e dati dei test isolati dalle impostazioni personali.
+
+### Verifica
+- 54 test automatici con installazioni simulate, prova della demo nel browser e lettura delle versioni reali su macOS. Nessuna app di terze parti aggiornata durante le prove.
+
 ## [1.9.1] - 2026-10-10
 
 ### Corretto

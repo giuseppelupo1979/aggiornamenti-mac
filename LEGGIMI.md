@@ -4,7 +4,7 @@
 
 [English README →](README.md)
 
-![Aggiornamento di tre app: barra generale in alto, sotto ogni app una barra con la fase in corso](docs/demo.gif)
+![Nuova interfaccia con selezione evidenziata e rinvii](docs/interface-it.png)
 
 ## Cosa fa
 
@@ -18,9 +18,9 @@
 - **Si aggiorna da solo:** quando esce una nuova versione di Aggiornamenti la pagina la segnala con un pulsante *Installa*, e il controllo giornaliero manda una notifica.
 - **Italiano e inglese** secondo la lingua del Mac, tema chiaro e scuro.
 
-| | |
-|---|---|
-| ![Elenco degli aggiornamenti](docs/list-it.png) | ![Impostazioni del controllo automatico](docs/settings-it.png) |
+**Novità della 1.10:** verifica delle versioni installate, rinvii per 24 ore o una settimana e salto di una versione, storico filtrabile con diagnostica oscurata e tema Come macOS/Chiaro/Scuro. Gli aggiornamenti automatici possono richiedere la corrente ed evitare hotspot e reti con Consumo limitato; la pagina mostra il prossimo tentativo.
+
+![Tema scuro](docs/interface-dark.png)
 
 ## Installazione
 

@@ -34,14 +34,14 @@ Al termine del controllo sono già selezionati tutti gli aggiornamenti sicuri. P
 
 - clic su una riga per selezionarla o deselezionarla;
 - **Seleziona tutto** per selezionare o togliere tutto in un colpo;
-- **Aggiorna** (o **Aggiorna tutto**) per partire.
+- **Aggiorna N app** per partire.
 
 Gli aggiornamenti vengono eseguiti uno alla volta. In alto compare una barra generale (per esempio *2 di 5 · 40%*); sotto ogni riga una barra mostra la fase in corso:
 
 - **Download**, con i megabyte scaricati e la percentuale reale quando la dimensione del file è nota (barra animata quando non lo è);
 - **Installazione**;
 - **Sostituzione della versione precedente**;
-- **Rifinitura**, poi la riga diventa *Aggiornata*.
+- **Rifinitura** e **Verifica versione installata**. La riga diventa *Aggiornata* soltanto se la versione locale coincide con quella prevista. Altrimenti mostra *Da verificare*: leggi i Dettagli e ripeti Controlla. Gli installer `.pkg` gestiti direttamente via Sparkle riportano anche l’eventuale richiesta di riavvio o uscita dalla sessione, senza eseguirla.
 
 Durante il giro il pulsante **Aggiorna** diventa **Interrompi**: il programma finisce l'installazione in corso (fermarla a metà lascerebbe l'app danneggiata) e lascia le altre per dopo, di nuovo selezionabili.
 
@@ -52,6 +52,24 @@ Puoi chiudere la pagina durante gli aggiornamenti: il lavoro continua e ritrovi 
 Se una riga finisce in **Non riuscito**, clicca **Dettagli** accanto per leggere il motivo. Ogni aggiornamento, riuscito o no, finisce nello **Storico** in fondo alla pagina, con versione di partenza, versione nuova ed esito.
 
 **Controlla** ripete la ricerca da capo. Se il controllo non riesce (per esempio senza rete o con Homebrew che non risponde), il sottotitolo lo dice e la pagina mostra l'ultimo elenco valido: non scrive mai "nessun aggiornamento" per errore. Se invece non risponde solo una fonte secondaria (App Store, Aggiornamento Software, aggiornamento del catalogo Homebrew), sopra l'elenco compare una riga rossa che dice quale.
+
+## Rimandare senza escludere
+
+Il menu **Rimanda…** di ogni app permette di aspettare 24 ore, una settimana oppure saltare soltanto la versione proposta. L’app passa in **Rimandate** e non entra nelle selezioni o negli aggiornamenti notturni. **Riprendi** annulla il rinvio; con Salta questa versione torna disponibile quando compare una versione diversa. I rinvii sono conservati anche chiudendo il programma.
+
+## Storico e diagnostica
+
+Lo **Storico** conserva gli ultimi 300 tentativi. I filtri selezionano un’app o un esito; aprendo una voce leggi versioni di partenza, richiesta e rilevata, codice di uscita (quando disponibile), modalità e log. **Esporta diagnostica** scarica un JSON sul Mac, senza inviarlo a servizi esterni. I percorsi utente, email, URL e credenziali riconoscibili vengono oscurati; il rapporto contiene comunque nomi delle app, date e versioni: rileggilo prima di condividerlo.
+
+## Aspetto e accessibilità
+
+In fondo alla pagina scegli **Come macOS**, **Chiaro** o **Scuro**. La preferenza resta salvata. Le azioni principali sono blu, gli esiti riusciti verdi e le verifiche richieste ambra. La selezione evidenzia tutta la riga e il pulsante in alto indica quante app aggiornerai. Caselle, menu e pulsanti si possono usare con Tab, spazio e Invio; con Riduci movimento le animazioni sono disattivate.
+
+## Corrente, rete e prossimo tentativo
+
+Nel Controllo automatico sono attive di serie **solo quando collegato alla corrente** ed **evita hotspot e reti con consumo limitato**. Si applicano alle installazioni automatiche, non ai comandi manuali né al controllo giornaliero con sola notifica. La rete viene valutata tramite i segnali “expensive” e “constrained” di macOS: non è una verifica del contratto tariffario della connessione.
+
+Se manca una condizione o il Mac non riesce a verificarla, la pagina mostra il motivo e il prossimo tentativo. Riprova ogni cinque minuti, entro cinque ore dall’orario scelto, anche attraversando mezzanotte; oltre quella finestra aspetta la notte successiva. Aggiornamenti deve restare attivo perché il tentativo avvenga.
 
 ## Spazio su disco
 

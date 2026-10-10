@@ -4,6 +4,8 @@ Avvio: python3 -m unittest discover -s tests -v
 """
 import copy
 import datetime as dt
+import io
+import json
 import os
 import subprocess
 import sys
@@ -14,7 +16,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SANDBOX = tempfile.TemporaryDirectory(prefix="agg-test-")
-os.environ["HOME"] = SANDBOX.name   # impostazioni, cache e registro finiscono nella cartella di prova
+os.environ["AGG_DATA_DIR"] = SANDBOX.name   # impostazioni, cache e registro finiscono nella cartella di prova
 os.environ["AGG_LANG"] = "it"
 sys.path.insert(0, str(ROOT))
 import server as s  # noqa: E402
@@ -96,7 +98,7 @@ class Queue(Base):
             return 0, ""
         with patch.object(s, "running_app", return_value=True), patch.object(s, "quit_app", return_value="closed"), \
              patch.object(s, "run_stream", return_value=(0, "")), patch.object(s, "remote_size", return_value=None), \
-             patch.object(s, "run", side_effect=run):
+             patch.object(s, "run", side_effect=run), patch.object(s, "verify_install", return_value=("done", "1.1")):
             s.update_one(ITEM)
         self.assertEqual(s.state["jobs"][ITEM["id"]]["status"], "done")
         self.assertTrue(s.state["items"][0]["updated"])
@@ -141,7 +143,7 @@ class Closing(Base):
         self.assertEqual(s.state["jobs"][ITEM["id"]]["status"], "blocked")
 
     def test_auto_mode_postpones_open_app(self):
-        with patch.object(s, "running_app", return_value=True), patch.object(s, "quit_app") as quit_, \
+        with patch.object(s, "automatic_block_reason", return_value=None), patch.object(s, "running_app", return_value=True), patch.object(s, "quit_app") as quit_, \
              patch.object(s, "run_stream") as run:
             s.update_one(ITEM, mode="auto")
         quit_.assert_not_called()
@@ -151,7 +153,7 @@ class Closing(Base):
     def test_force_mode_kills_only_on_request(self):
         with patch.object(s, "running_app", return_value=True), patch.object(s, "force_quit", return_value=True) as force, \
              patch.object(s, "quit_app") as quit_, patch.object(s, "run_stream", return_value=(0, "")), \
-             patch.object(s, "remote_size", return_value=None), patch.object(s, "run", return_value=(0, "")):
+             patch.object(s, "remote_size", return_value=None), patch.object(s, "run", return_value=(0, "")), patch.object(s, "verify_install", return_value=("done", "1.1")):
             s.update_one(ITEM, mode="force")
         force.assert_called_once()
         quit_.assert_not_called()
@@ -230,6 +232,238 @@ class Api(Base):
     def test_corrupt_settings_fall_back_to_defaults(self):
         Path(s.SETTINGS_FILE).write_text("[1, 2]")
         self.assertEqual(s.load_settings()["check_time"], s.DEFAULT_SETTINGS["check_time"])
+
+
+class Snooze(Base):
+    def test_timed_snooze_expires(self):
+        with patch.object(s.time, "time", return_value=1000):
+            s.snooze_item(ITEM, "day")
+        self.assertIsNotNone(s.active_snooze(ITEM, now=87399))
+        self.assertIsNone(s.active_snooze(ITEM, now=87400))
+
+    def test_skip_only_requested_version(self):
+        s.snooze_item(ITEM, "version")
+        self.assertIsNotNone(s.active_snooze(ITEM))
+        self.assertIsNone(s.active_snooze(dict(ITEM, latest="1.2")))
+        self.assertEqual(s.visible_pending(), [])
+
+    def test_resume_keeps_exclusion(self):
+        s.save_excluded({ITEM["key"]: {"name": "App"}})
+        s.snooze_item(ITEM, "week")
+        s.snooze_item(ITEM, "resume")
+        self.assertIsNone(s.active_snooze(ITEM))
+        self.assertIn(ITEM["key"], s.load_excluded())
+
+    def test_queue_cannot_install_snoozed_app(self):
+        s.snooze_item(ITEM, "week")
+        with patch.object(s, "update_one") as up, patch.object(s, "cleanup"):
+            s.do_updates({ITEM["id"]})
+        up.assert_not_called()
+
+
+class Conditions(Base):
+    def test_battery_or_unknown_power_blocks_automatic_updates(self):
+        for ac, reason in ((False, "battery"), (None, "power_unknown")):
+            with patch.object(s, "on_ac_power", return_value=ac):
+                self.assertEqual(s.automatic_block_reason(), reason)
+
+    def test_metered_and_unknown_network_block_automatic_updates(self):
+        with patch.object(s, "on_ac_power", return_value=True):
+            for cost in ("metered", "unknown", "offline", "unrestricted"):
+                with patch.object(s, "network_cost", return_value=cost):
+                    self.assertEqual(s.automatic_block_reason(), None if cost == "unrestricted" else cost)
+
+    def test_opt_out_does_not_probe_system(self):
+        with patch.object(s, "on_ac_power") as power, patch.object(s, "network_cost") as cost:
+            self.assertIsNone(s.automatic_block_reason(dict(s.DEFAULT_SETTINGS, only_ac=False, avoid_metered=False)))
+        power.assert_not_called()
+        cost.assert_not_called()
+
+    def test_blocked_auto_does_not_scan_or_consume_day(self):
+        with patch.object(s, "automatic_block_reason", return_value="battery"), patch.object(s, "start_scan_sync") as scan:
+            self.assertFalse(s.auto_update())
+        scan.assert_not_called()
+        self.assertEqual(s.state["auto_wait"], "battery")
+        self.assertIsNone(s.load_settings()["last_auto_day"])
+
+    def test_condition_rechecked_before_install(self):
+        with patch.object(s, "automatic_block_reason", return_value="metered"), patch.object(s, "run_stream") as run:
+            s.update_one(ITEM, "auto")
+        run.assert_not_called()
+        self.assertEqual(s.state["jobs"][ITEM["id"]]["status"], "deferred")
+
+    def test_night_window_crosses_midnight(self):
+        now = dt.datetime(2026, 10, 11, 1, 0)
+        self.assertTrue(s.due("23:00", None, now, 5))
+        self.assertFalse(s.due("23:00", "2026-10-10", now, 5))
+        self.assertFalse(s.due("23:00", None, now.replace(hour=4), 5))
+
+    def test_next_attempt_respects_window_and_completed_night(self):
+        now = dt.datetime(2026, 10, 11, 6, 0)
+        settings = dict(s.DEFAULT_SETTINGS, auto_update=True)
+        self.assertEqual(s.next_auto_attempt(settings, now), (now + dt.timedelta(seconds=30)).timestamp())
+        settings["last_auto_day"] = "2026-10-11"
+        self.assertEqual(s.next_auto_attempt(settings, now), dt.datetime(2026, 10, 12, 3).timestamp())
+
+
+class Diagnostics(Base):
+    def test_export_redacts_personal_data_without_changing_versions(self):
+        raw = r'C:\Users\Alice\file.log alice@example.org https://example.org/?token=secret token=abc'
+        s.add_history({"name": "App", "from": "1.2.3.4", "log": raw})
+        report = s.diagnostic_report()
+        encoded = json.dumps(report)
+        for private in ("Alice", "alice@example.org", "example.org", "secret", "abc"):
+            self.assertNotIn(private, encoded)
+        self.assertEqual(report["history"][0]["from"], "1.2.3.4")
+
+    def test_settings_changes_preserve_snoozes(self):
+        s.snooze_item(ITEM, "week")
+        s.update_settings(lambda x: x.update(theme="light"))
+        self.assertIsNotNone(s.active_snooze(ITEM))
+
+    def test_defaults_are_not_mutated_by_snoozing(self):
+        s.snooze_item(ITEM, "week")
+        Path(s.SETTINGS_FILE).unlink()
+        self.assertEqual(s.load_settings()["snoozed"], {})
+
+    def test_redaction_covers_bearer_and_quoted_password(self):
+        self.assertNotIn("private-token", s.redact("Authorization: Bearer private-token"))
+        self.assertNotIn("private phrase", s.redact('password="a private phrase"'))
+
+
+class NewApi(Base):
+    def post(self, path, body):
+        handler = object.__new__(s.Handler)
+        raw = json.dumps(body).encode()
+        handler.headers = {"Host": f"{s.HOST}:{s.PORT}", "Content-Length": str(len(raw))}
+        handler.path = path
+        handler.rfile = io.BytesIO(raw)
+        replies = []
+        handler.send = lambda code, payload: replies.append((code, payload))
+        handler.snapshot = lambda: {"ok": True}
+        handler.do_POST()
+        return replies[-1]
+
+    def test_settings_reject_invalid_types(self):
+        for body in ({"only_ac": "false"}, {"avoid_metered": 0}, {"theme": "no"}, {"auto_time": "25:00"}):
+            with self.subTest(body=body):
+                self.assertEqual(self.post("/api/settings", body)[0], 400)
+
+    def test_settings_saved_without_losing_snooze(self):
+        s.snooze_item(ITEM, "version")
+        self.assertEqual(self.post("/api/settings", {"only_ac": False, "theme": "dark"})[0], 200)
+        self.assertFalse(s.load_settings()["only_ac"])
+        self.assertEqual(s.load_settings()["theme"], "dark")
+        self.assertIsNotNone(s.active_snooze(ITEM))
+
+    def test_snooze_validated_and_persisted(self):
+        self.assertEqual(self.post("/api/snooze", {"id": ITEM["id"], "choice": "week"})[0], 200)
+        self.assertIsNotNone(s.active_snooze(ITEM))
+        self.assertEqual(self.post("/api/snooze", {"id": ITEM["id"], "choice": "forever"})[0], 400)
+        self.assertEqual(self.post("/api/snooze", {"id": "missing", "choice": "day"})[0], 404)
+
+    def test_stale_selection_cannot_install_snoozed_app(self):
+        s.snooze_item(ITEM, "day")
+        self.assertEqual(self.post("/api/update", {"ids": [ITEM["id"]]})[0], 409)
+        self.assertFalse(s.state["running"])
+
+    def test_cannot_snooze_during_install(self):
+        s.state["running"] = True
+        self.assertEqual(self.post("/api/snooze", {"id": ITEM["id"], "choice": "day"})[0], 409)
+        self.assertIsNone(s.active_snooze(ITEM))
+
+
+
+
+class MacVerification(Base):
+    def test_bundle_version_and_build_are_read_from_disk(self):
+        info = {"CFBundleIdentifier": ITEM["bundle_id"], "CFBundleShortVersionString": "1.1", "CFBundleVersion": "123"}
+        with patch.object(s, "read_info", return_value=info), patch.object(s, "run") as run:
+            for expected in ("1.1", "123", "1.1,123"):
+                self.assertEqual(s.installed_version(dict(ITEM, latest=expected)), expected)
+        run.assert_not_called()
+
+    def test_missing_or_different_bundle_never_falls_back_to_receipt(self):
+        with patch.object(s, "run") as run:
+            for info in (None, {"CFBundleIdentifier": "another.app", "CFBundleShortVersionString": "1.1"}):
+                with patch.object(s, "read_info", return_value=info):
+                    self.assertIsNone(s.installed_version(ITEM))
+        run.assert_not_called()
+
+    def test_formula_uses_linked_keg_not_catalog_or_unused_new_version(self):
+        data = {"formulae": [{"name": "app", "linked_keg": "1.0", "versions": {"stable": "1.1"},
+                              "installed": [{"version": "1.0"}, {"version": "1.1"}]}]}
+        with patch.object(s, "run", return_value=(0, json.dumps(data))):
+            self.assertEqual(s.installed_version(dict(ITEM, kind="formula", path=None)), "1.0")
+
+    def test_cask_receipt_not_catalog_version(self):
+        with patch.object(s, "run", return_value=(0, '{"casks":[{"token":"app","version":"1.1","installed":"1.0"}]}')):
+            self.assertEqual(s.installed_version(dict(ITEM, kind="cask", path=None)), "1.0")
+
+    def test_mas_exact_id_only(self):
+        with patch.object(s, "run", return_value=(0, '1234 App (1.1)\n123 Other (1.0)')):
+            self.assertEqual(s.installed_version(dict(ITEM, kind="mas", token="123")), "1.0")
+            self.assertIsNone(s.installed_version(dict(ITEM, kind="mas", token="12")))
+
+    def test_successful_command_with_old_version_needs_verification(self):
+        with patch.object(s, "running_app", return_value=False), patch.object(s, "run_stream", return_value=(0, "")), \
+             patch.object(s, "remote_size", return_value=None), patch.object(s, "cask_by_token", return_value={}), \
+             patch.object(s, "installed_version", return_value="1.0"), patch.object(s.time, "sleep"):
+            s.update_one(ITEM)
+        self.assertEqual(s.state["jobs"][ITEM["id"]]["status"], "unverified")
+        self.assertFalse(s.state["items"][0].get("updated"))
+        history = s.load_history()[-1]
+        self.assertEqual((history["observed"], history["exit_code"]), ("1.0", 0))
+
+    def test_version_verified_and_log_redacted_in_history(self):
+        def install(cmd, log):
+            log('/Users/Alice/Downloads/app alice@example.org Authorization: Bearer secret')
+            return 0, ""
+        with patch.object(s, "running_app", return_value=False), patch.object(s, "run_stream", side_effect=install), \
+             patch.object(s, "remote_size", return_value=None), patch.object(s, "cask_by_token", return_value={}), \
+             patch.object(s, "installed_version", return_value="1.1"):
+            s.update_one(ITEM)
+        history = s.load_history()[-1]
+        self.assertEqual(history["result"], "done")
+        self.assertNotIn("Alice", history["log"])
+        self.assertNotIn("secret", history["log"])
+
+    def test_failed_command_is_not_made_successful_by_version(self):
+        with patch.object(s, "running_app", return_value=False), patch.object(s, "run_stream", return_value=(1, "")), \
+             patch.object(s, "remote_size", return_value=None), patch.object(s, "cask_by_token", return_value={}), \
+             patch.object(s, "installed_version") as check:
+            s.update_one(ITEM)
+        check.assert_not_called()
+        self.assertEqual(s.load_history()[-1]["result"], "error")
+
+    def test_version_normalization_does_not_match_suffixes(self):
+        self.assertTrue(s.version_matches("1.1.0", "1.1"))
+        for a, b in (("1.10", "1.1"), ("1.1-beta", "1.1"), ("Unknown", "Unknown"), (None, "1")):
+            self.assertFalse(s.version_matches(a, b))
+
+    def test_restart_metadata_only_applies_after_success(self):
+        for code in (0, 1):
+            s.state["jobs"][ITEM["id"]] = {"status": "running"}
+            with patch.object(s, "has_password", return_value=True), patch.object(s, "run", side_effect=[
+                (0, "Developer ID Installer: Test (TEAM123)"), (0, "RequireRestart"), (code, "result")]):
+                self.assertEqual(s.install_pkg("/tmp/test.pkg", "TEAM123", ITEM["id"], lambda x: None), code == 0)
+            self.assertEqual(s.state["jobs"][ITEM["id"]].get("restart_action"), "RequireRestart" if code == 0 else None)
+
+    def test_sparkle_restart_is_distinct_from_verified_success(self):
+        def install(item, log):
+            s.state["jobs"][item["id"]].update(restart_action="RequireRestart", exit_code=0)
+            return True
+        with patch.object(s, "running_app", return_value=False), patch.object(s, "install_sparkle", side_effect=install), \
+             patch.object(s, "installed_version", return_value="1.1"):
+            s.update_one(dict(ITEM, kind="sparkle"))
+        self.assertEqual(s.load_history()[-1]["result"], "restart")
+        self.assertFalse(s.state["items"][0].get("updated"))
+
+    def test_power_source_desktop_battery_ups_and_unknown(self):
+        for text, expected in (("Now drawing from 'AC Power'", True), ("Now drawing from 'Battery Power'", False),
+                               ("Now drawing from 'UPS Power'", False), ("", None)):
+            with patch.object(s, "run", return_value=(0, text)):
+                self.assertIs(s.on_ac_power(), expected)
 
 
 if __name__ == "__main__":

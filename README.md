@@ -4,7 +4,7 @@
 
 *Aggiornamenti* is Italian for "updates". [Leggimi in italiano →](LEGGIMI.md)
 
-![Updating three apps: overall progress on top, a progress bar with the current phase under each app](docs/demo.gif)
+![New interface with selected apps and postpone controls](docs/interface-en.png)
 
 ## Why
 
@@ -20,10 +20,9 @@ Keeping a Mac up to date means juggling Homebrew, the App Store and dozens of ap
 - **Keeps itself up to date.** When a new version of Aggiornamenti is released, the page shows it with a one-click *Install*, and the daily check sends a notification.
 - **English and Italian**, following your Mac's language. Light and dark mode.
 
-| | |
-|---|---|
-| ![The list of available updates](docs/list-en.png) | ![Settings: daily check, nightly updates, start at login](docs/settings-en.png) |
-| ![Dark mode](docs/list-en-dark.png) | ![Italian interface](docs/list-it.png) |
+**New in 1.10:** verified installed versions, persistent postponement (24 hours, one week or one release), searchable history with redacted diagnostics, and saved system/light/dark themes. Automatic updates can require AC power and avoid hotspots or Low Data Mode networks, with the next attempt shown in the page.
+
+![Dark appearance](docs/interface-dark.png)
 
 ## Install
 
@@ -83,11 +82,11 @@ Demo mode shows sample apps and simulates updates on a separate port. It changes
 
 In the page:
 
-- **Click a row** to select it, or use **Select all**, then press **Update**. Apps flagged *major version* or *unverified* are never preselected.
+- **Click a row** to select it, or use **Select all**, then press **Update**. Apps flagged *major version* or *unverified* are never preselected. **Postpone** an update for 24 hours or a week, or skip that release; **Resume** makes it available again.
 - **Exclude**, next to each row, moves an app to the *Excluded* section.
-- While updates run, the button becomes **Stop**: the current installation finishes and the rest are left for later. Every update ends up in the **History** section.
+- While updates run, the button becomes **Stop**: the current installation finishes and the rest are left for later. Every attempt ends up in **History**, with app/result filters, detected version, exit code and expandable log. **Export diagnostics** downloads a JSON report locally; recognizable private data is redacted, but review it before sharing.
 - **Quit**, next to the version at the bottom, closes the program (after the current update, never halfway).
-- **Automatic check** (at the bottom): daily check time, nightly updates and *start at login*. Turn on *start at login*, because the schedule only runs while the server is running.
+- **Automatic check** (at the bottom): daily check time, nightly updates and *start at login*. Turn on *start at login*, because the schedule only runs while the server is running. Automatic installation retries for up to five hours after the chosen time. AC power and unrestricted networking are required by default; unknown conditions defer the attempt. The daily notification-only check is independent of these installation conditions.
 - **Administrator password** (optional): App Store updates and `.pkg` installers need admin rights. Without the password, everything else still works.
 
 - **New version of Aggiornamenti itself:** a box at the top of the page links to what's new and has an *Install* button. It upgrades the way you installed it (Homebrew, git clone or downloaded archive), restarts the server and reloads the page.
@@ -106,7 +105,7 @@ The full manual is in Italian: [MANUALE.md](MANUALE.md).
 | Apps with a Sparkle feed, not in the catalog | the developer's update feed | download, signature check, replace |
 | Command-line tools | `brew outdated` | `brew upgrade --formula` |
 
-It is a single Python file using only the standard library, plus one HTML page. It runs on macOS's own Python 3.9 or newer.
+It uses Python’s standard library, a small native macOS network-status helper and one HTML page. It runs on macOS's own Python 3.9 or newer.
 
 ## Privacy and safety: read this before installing
 
@@ -123,6 +122,7 @@ This tool replaces apps and can run installers as administrator, so here is exac
 
 ## Limitations
 
+- A successful installer command is confirmed against the local installed version; otherwise the result is **Needs verification**. Direct Sparkle `.pkg` installs also report their declared restart/logout requirement. There is no universal reboot status for all Homebrew or App Store installers.
 - macOS system updates are only reported, with a button that opens Software Update. They are not installed.
 - Apps with their own update systems (Microsoft AutoUpdate, Adobe) are covered only if they are in the Homebrew catalog.
 - Versions are compared numerically. Unusual numbering can produce the occasional false update, which you can simply deselect or exclude.

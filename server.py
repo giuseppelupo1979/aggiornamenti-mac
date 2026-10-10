@@ -11,6 +11,7 @@ Solo libreria standard. Ascolta soltanto su 127.0.0.1.
 """
 
 import concurrent.futures as cf
+import copy
 import datetime as dt
 import glob
 import hashlib
@@ -26,10 +27,11 @@ import threading
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+from network_status import current_cost
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.9.1"   # tenere allineata con CHANGELOG.md
+VERSION = "1.10.0"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -46,16 +48,18 @@ SPARKLE_NS = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
 APP_DIRS = ["/Applications", "/Applications/Utilities", os.path.expanduser("~/Applications")]
 
 SUPPORT = (tempfile.mkdtemp(prefix="aggiornamenti-demo-") if DEMO
-           else os.path.expanduser("~/Library/Application Support/AggiornamentiMac"))
+           else os.environ.get("AGG_DATA_DIR") or os.path.expanduser("~/Library/Application Support/AggiornamentiMac"))
 EXCLUDED_FILE = os.path.join(SUPPORT, "esclusi.json")
 SETTINGS_FILE = os.path.join(SUPPORT, "impostazioni.json")
 HISTORY_FILE = os.path.join(SUPPORT, "storico.json")
-LOG_FILE = (os.path.join(SUPPORT, "eventi.log") if DEMO
+LOG_FILE = (os.path.join(SUPPORT, "eventi.log") if DEMO or os.environ.get("AGG_DATA_DIR")
             else os.path.expanduser("~/Library/Logs/AggiornamentiMac-eventi.log"))
 LAUNCH_LABEL = "com.aggiornamenti-mac"
 LAUNCH_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCH_LABEL}.plist")
 PAGE_URL = f"http://{HOST}:{PORT}"
 
+if DEMO or os.environ.get("AGG_DATA_DIR"):
+    CACHE = os.path.join(SUPPORT, "cache")
 os.makedirs(CACHE, exist_ok=True)
 os.makedirs(SUPPORT, exist_ok=True)
 
@@ -93,6 +97,7 @@ LANG = system_lang()
 MESSAGES = {
     "available": ("{n} aggiornamento disponibile", "{n} aggiornamenti disponibili", "{n} update available", "{n} updates available"),
     "upd_ok": ("{n} app aggiornata", "{n} app aggiornate", "{n} app updated", "{n} apps updated"),
+    "upd_attention": ("{n} da verificare",) * 2 + ("{n} need verification",) * 2,
     "upd_fail": ("{n} non riuscita", "{n} non riuscite", "{n} failed", "{n} failed"),
     "upd_postponed": ("{n} rimandata perché aperta", "{n} rimandate perché aperte", "{n} postponed (in use)", "{n} postponed (in use)"),
     "freed": ("liberati {x}", "liberati {x}", "{x} freed", "{x} freed"),
@@ -130,7 +135,7 @@ def t(key, n=1, **kw):
     return text.format(n=n, **kw)
 
 
-lock = threading.Lock()
+lock = threading.RLock()
 state = {
     "scanning": False,
     "scanned_at": None,
@@ -145,6 +150,8 @@ state = {
     "stale": False,       # l'ultimo controllo non è riuscito: l'elenco è quello del controllo precedente
     "scan_warnings": [],  # fonti che non hanno risposto (elenco forse incompleto)
     "stop": False,        # "Interrompi": finisce l'installazione in corso e salta le successive
+    "auto_wait": None,
+    "auto_retry_at": 0,
     "quit_after": False,  # "Esci" chiesto durante un aggiornamento: si esce alla fine
     "quitting": False,
     # nuova versione di Aggiornamenti stesso: {latest, url, notes, checked_at, status, log}
@@ -180,9 +187,9 @@ def _load(path, default):
             data = json.load(f)
         if not isinstance(data, type(default)):
             raise ValueError("formato inatteso")
-        return {**default, **data} if isinstance(default, dict) else data
+        return {**copy.deepcopy(default), **data} if isinstance(default, dict) else data
     except Exception:
-        return type(default)(default)
+        return copy.deepcopy(default)
 
 
 def _save(path, data):
@@ -226,6 +233,7 @@ DEFAULT_SETTINGS = {
     "last_auto_day": None,
     "last_auto": None,       # {at, updated, failed, postponed}
     "last_cleanup": None,    # {at, freed}
+    "only_ac": True, "avoid_metered": True, "theme": "system", "snoozed": {},
 }
 
 
@@ -246,6 +254,160 @@ def update_settings(change):
         change(s)
         save_settings(s)
         return s
+
+
+def redact(text):
+    """Best-effort local redaction, also applied before persisting installer output."""
+    text = str(text)
+    for key in ("USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP"):
+        value = os.environ.get(key)
+        if value and len(value) > 3:
+            text = re.sub(re.escape(value), "[user-path]", text, flags=re.I)
+    text = re.sub(r"(?i)[a-z]:[\\/]Users[\\/][^\\/\s\"']+", "[user-path]", text)
+    text = re.sub(r"/(?:Users|home)/[^/\s]+", "[user-path]", text)
+    text = re.sub(r"https?://[^\s<>\"']+", "[url]", text, flags=re.I)
+    text = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email]", text)
+    text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[address]", text)
+    text = re.sub(r"(?i)((?:token|password|secret|api[_-]?key|authorization)\s*[:=]\s*)[^\r\n]+", r"\1[redacted]", text)
+    for key in ("USER", "LOGNAME", "USERNAME", "COMPUTERNAME"):
+        value = os.environ.get(key)
+        if value and len(value) > 2:
+            text = re.sub(r"\b" + re.escape(value) + r"\b", "[private]", text, flags=re.I)
+    return text
+
+def diagnostic_report():
+    s = load_settings()
+    with lock:
+        error = state["scan_error"]
+    # Intentionally omit environment, paths, exclusions and raw settings.
+    return {"version": VERSION, "created_at": time.time(), "platform": "macos",
+            "settings": {k: s[k] for k in ("daily_check", "check_time", "auto_update", "auto_time", "only_ac", "avoid_metered")},
+            "scan_error": redact(error) if error else None,
+            "history": [{k: redact(v) if isinstance(v, str) and k in ("log", "name") else v
+                         for k, v in h.items()} for h in load_history()]}
+
+def active_snooze(item, settings=None, now=None):
+    s = (settings if settings is not None else load_settings()).get("snoozed", {}).get(item["key"])
+    if not s:
+        return None
+    if s.get("version"):
+        return s if s["version"] == item.get("latest") else None
+    return s if s.get("until", 0) > (time.time() if now is None else now) else None
+
+def snooze_item(item, choice):
+    def change(s):
+        entries = s.setdefault("snoozed", {})
+        if choice == "resume":
+            entries.pop(item["key"], None)
+            return
+        entry = {"name": item["name"]}
+        if choice == "version":
+            entry["version"] = item["latest"]
+        else:
+            entry["until"] = time.time() + (1 if choice == "day" else 7) * 86400
+        entries[item["key"]] = entry
+    update_settings(change)
+
+def automatic_block_reason(settings=None):
+    if DEMO:
+        return None
+    s = settings if settings is not None else load_settings()
+    if s["only_ac"]:
+        ac = on_ac_power()
+        if ac is not True:
+            return "battery" if ac is False else "power_unknown"
+    if s["avoid_metered"]:
+        cost = network_cost()
+        if cost != "unrestricted":
+            return cost
+    return None
+
+def version_matches(observed, expected):
+    if not observed or not expected:
+        return False
+    if not re.fullmatch(r"\d+(?:\.\d+)*", observed) or not re.fullmatch(r"\d+(?:\.\d+)*", expected):
+        return observed.casefold() == expected.casefold() and bool(vparts(expected))
+    def normalize(value):
+        parts = [int(p) for p in value.split(".")]
+        while len(parts) > 1 and parts[-1] == 0:
+            parts.pop()
+        return parts
+    return normalize(observed) == normalize(expected)
+
+def verify_install(item, log):
+    observed = None
+    for attempt in range(2):
+        try:
+            observed = installed_version(item)
+        except Exception as e:
+            log(redact(e))
+        if version_matches(observed, item.get("latest")):
+            return "done", observed
+        if attempt == 0:
+            time.sleep(1)
+    log(("Versione installata rilevata: " if LANG == "it" else "Detected installed version: ") + (observed or "?") +
+        (". Verifica non conclusiva: ripeti Controlla." if LANG == "it" else ". Verification inconclusive: check again."))
+    return "unverified", observed
+
+def on_ac_power():
+    """pmset reports the current power source on both desktops and notebooks."""
+    try:
+        rc, out = run(["/usr/bin/pmset", "-g", "batt"], timeout=10)
+        if rc == 0:
+            if "'AC Power'" in out:
+                return True
+            if "'Battery Power'" in out or "'UPS Power'" in out:
+                return False
+    except Exception:
+        pass
+    return None
+
+
+def network_cost():
+    return current_cost()
+
+
+def installed_version(item):
+    """Read local versions, never the catalog's target or an empty outdated list."""
+    kind, token = item["kind"], item["token"]
+    path = item.get("path")
+    if path and kind in ("cask", "adopt", "sparkle"):
+        info = read_info(path)
+        if not info or (item.get("bundle_id") and info.get("CFBundleIdentifier") != item["bundle_id"]):
+            return None
+        version = str(info.get("CFBundleShortVersionString") or "")
+        build = str(info.get("CFBundleVersion") or "")
+        candidates = [version, build, version + "," + build]
+        for candidate in candidates:
+            if version_matches(candidate, item.get("latest")):
+                return candidate
+        return installed_for_compare(item.get("latest"), {"version": version, "build": build}) or None
+    if kind == "mas":
+        rc, out = run([MAS, "list"], timeout=120)
+        if rc == 0:
+            for line in out.splitlines():
+                match = re.fullmatch(r"\s*(\d+)\s+.+?\s+\(([^()]+)\)\s*", line)
+                if match and match[1] == token:
+                    return match[2]
+        return None
+    if kind in ("cask", "adopt", "formula"):
+        is_formula = kind == "formula"
+        rc, out = run([BREW, "info", "--json=v2", "--formula" if is_formula else "--cask", token], timeout=120)
+        if rc != 0:
+            return None
+        entries = json.loads(out).get("formulae" if is_formula else "casks", [])
+        for entry in entries:
+            if token not in (entry.get("name"), entry.get("full_name"), entry.get("token"), entry.get("full_token")):
+                continue
+            installed = entry.get("installed")
+            if is_formula:
+                # Prefer the linked keg, so an unused downloaded version cannot count as success.
+                if entry.get("linked_keg"):
+                    return entry["linked_keg"]
+                versions = [v["version"] for v in installed or [] if v.get("version")]
+                return versions[0] if len(versions) == 1 else None
+            return installed if isinstance(installed, str) else None
+    return None
 
 
 def login_enabled():
@@ -295,9 +457,10 @@ def notify(title, message):
 
 
 def visible_pending():
-    excluded = load_excluded()
+    excluded, settings = load_excluded(), load_settings()
     with lock:
-        return [i for i in state["items"] if not i.get("updated") and i.get("key") not in excluded]
+        return [i for i in state["items"] if not i.get("updated") and i.get("key") not in excluded
+                and not active_snooze(i, settings)]
 
 
 def start_scan_sync():
@@ -337,8 +500,7 @@ def check_self_update(force=False):
         info["checked_at"] = time.time()
     if DEMO:
         with lock:
-            major, minor = (vparts(VERSION) + [0, 0])[:2]   # sempre una versione "più nuova" di quella attuale
-            state["self"].update(latest=f"{major}.{minor + 1}.0", url=f"https://github.com/{REPO}/releases", notes="Demo")
+            state["self"].update(latest=VERSION, url=f"https://github.com/{REPO}/releases", notes="Demo")
         return
     try:
         req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "AggiornamentiMac",
@@ -460,29 +622,34 @@ def scheduled_check():
 def auto_update():
     """Aggiornamento notturno. Restituisce False se non è potuto partire (programma occupato), così
     lo scheduler riprova invece di considerare fatta la giornata."""
-    if not start_scan_sync():
+    blocked = automatic_block_reason()
+    with lock:
+        state["auto_wait"] = blocked
+    if blocked or not start_scan_sync():
         return False
     with lock:
         if state["stale"]:
-            return True   # scansione fallita: niente aggiornamenti alla cieca, si riprova domani
+            state["auto_wait"] = "scan_failed"
+            return False
     ids = [i["id"] for i in visible_pending() if not i.get("major") and i.get("verified") is not False]
     if ids:
         with lock:
             if state["running"] or state["scanning"]:
                 return False
             state["running"] = True
-        # modalità "auto": ogni app viene ricontrollata subito prima dell'installazione e,
-        # se aperta, rimandata (mai chiusa mentre la stai usando)
+        # modalità "auto": ogni programma viene ricontrollato subito prima dell'installazione e,
+        # se aperto, rimandato (mai chiuso)
         do_updates(set(ids), mode="auto")
     with lock:
         jobs = {k: v["status"] for k, v in state["jobs"].items() if k in ids}
         names = {i["id"]: i["name"] for i in state["items"]}
     updated = [names[k] for k, st in jobs.items() if st == "done"]
     failed = [names[k] for k, st in jobs.items() if st in ("error", "blocked")]
+    attention = [names[k] for k, st in jobs.items() if st in ("unverified", "restart", "restart_before")]
     postponed = [names[k] for k, st in jobs.items() if st == "postponed"]
     s = update_settings(lambda st: st.update(last_auto={"at": time.time(), "updated": updated,
-                                                        "failed": failed, "postponed": postponed}))
-    if updated or failed or postponed:
+                                                        "failed": failed, "postponed": postponed, "attention": attention}))
+    if updated or failed or postponed or attention:
         parts = []
         if updated:
             parts.append(t("upd_ok", len(updated)))
@@ -490,14 +657,38 @@ def auto_update():
             parts.append(t("upd_fail", len(failed)))
         if postponed:
             parts.append(t("upd_postponed", len(postponed)))
+        if attention:
+            parts.append(t("upd_attention", len(attention)))
         lc = s.get("last_cleanup") or {}
         if lc.get("freed"):
             parts.append(t("freed", x=human(lc["freed"])))
         notify(t("auto_title"), ", ".join(parts))
-    return True
+    return not any(st == "deferred" for st in jobs.values())
 
 
 NIGHT_WINDOW_HOURS = 5   # l'aggiornamento "notturno" recupera al risveglio solo entro 5 ore dall'orario scelto
+
+
+def schedule_start(hhmm, now):
+    h, m = map(int, hhmm.split(":"))
+    return now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+def night_start(hhmm, now):
+    start = schedule_start(hhmm, now)
+    return start - dt.timedelta(days=1) if now < start else start
+
+
+def next_auto_attempt(settings, now=None):
+    if not settings["auto_update"]:
+        return None
+    now = now or dt.datetime.now()
+    start = night_start(settings["auto_time"], now)
+    end = start + dt.timedelta(hours=NIGHT_WINDOW_HOURS)
+    retry = dt.datetime.fromtimestamp(state.get("auto_retry_at", 0))
+    if settings["last_auto_day"] != start.date().isoformat() and now < end and retry < end:
+        return max(now + dt.timedelta(seconds=30), retry).timestamp()
+    return (start + dt.timedelta(days=1)).timestamp()
 
 
 def due(hhmm, last_day, now, window_hours=None):
@@ -506,26 +697,29 @@ def due(hhmm, last_day, now, window_hours=None):
         h, m = map(int, hhmm.split(":"))
     except Exception:
         return False
-    start = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    if last_day == now.date().isoformat() or now < start:
+    start = night_start(hhmm, now) if window_hours is not None else now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if last_day == start.date().isoformat() or now < start:
         return False
     return window_hours is None or now < start + dt.timedelta(hours=window_hours)
 
 
 def scheduler():
-    """Controlla ogni 30 secondi se è ora del controllo o dell'aggiornamento automatico.
-    Se il Mac dormiva all'ora prevista, il controllo recupera appena si risveglia; l'aggiornamento
-    notturno solo entro poche ore, per non chiudere e aggiornare app in pieno giorno."""
     while True:
         time.sleep(30)
         try:
             now = dt.datetime.now()
             today = now.date().isoformat()
             s = load_settings()
-            if s["auto_update"] and due(s["auto_time"], s["last_auto_day"], now, NIGHT_WINDOW_HOURS):
+            if s["auto_update"] and due(s["auto_time"], s["last_auto_day"], now, NIGHT_WINDOW_HOURS) and time.time() >= state.get("auto_retry_at", 0):
                 # la giornata si segna come fatta solo se l'aggiornamento è davvero partito
                 if auto_update():
-                    update_settings(lambda st: st.update(last_auto_day=today, last_check_day=today))
+                    day = night_start(s["auto_time"], now).date().isoformat()
+                    update_settings(lambda st: st.update(last_auto_day=day, last_check_day=today))
+                    with lock:
+                        state["auto_retry_at"] = 0
+                else:
+                    with lock:
+                        state["auto_retry_at"] = time.time() + 300
             elif s["daily_check"] and due(s["check_time"], s["last_check_day"], now):
                 if scheduled_check():
                     update_settings(lambda st: st.update(last_check_day=today))
@@ -991,6 +1185,7 @@ def demo_scan():
                       "path": path if os.path.exists(path) else None, "key": f"{kind}:{token}"})
     with lock:
         state["items"] = items
+        state["jobs"] = {}
         state["unchecked"] = [{"name": n, "version": v, "reason": r, "path": None} for n, v, r in DEMO_UNCHECKED]
         state["macos"] = []
         state["scanning"] = False
@@ -1020,7 +1215,8 @@ def demo_update(item, mode="manual"):
     with lock:
         state["jobs"][jid]["status"] = "done"
         state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
-    add_history({"name": item["name"], "from": item["installed"], "to": item["latest"], "result": "done", "mode": mode})
+    add_history({"name": item["name"], "from": item["installed"], "to": item["latest"], "result": "done", "mode": mode,
+                 "observed": item["latest"], "exit_code": 0, "log": "Demo: installed version verified."})
 
 
 def do_scan(force_self_check=False):
@@ -1146,9 +1342,21 @@ def install_pkg(pkg, old_team, jid, log):
     if not has_password():
         log(t("need_pw_pkg"))
         return False
+    restart = None
+    try:
+        query_rc, action = run(["/usr/sbin/installer", "-pkg", pkg, "-target", "/", "-query", "RestartAction"], timeout=30)
+        if query_rc == 0 and action.strip() in ("RecommendRestart", "RequireRestart", "RequireShutdown", "RequireLogout"):
+            restart = action.strip()
+    except Exception:
+        pass
     set_progress(jid, phase="install", pct=82)
     rc, out = run(["sudo", "-A", "installer", "-pkg", pkg, "-target", "/"])
     log(out)
+    with lock:
+        state["jobs"][jid]["exit_code"] = rc
+        if rc == 0 and restart:
+            state["jobs"][jid]["restart_action"] = restart
+            log(restart)
     return rc == 0
 
 
@@ -1251,8 +1459,17 @@ def update_one(item, mode="manual"):
                 state["jobs"][jid]["log"] = "\n".join(lines)[-6000:]
 
     status, was_running = "error", False
+    observed, exit_code = None, None
     bid = item.get("bundle_id")
     try:
+        if mode == "auto":
+            reason = automatic_block_reason()
+            if reason:
+                with lock:
+                    state["auto_wait"] = reason
+                log(reason)
+                status = "deferred"
+                return
         was_running = item["kind"] in ("cask", "adopt", "sparkle") and running_app(bid)
         if was_running and mode == "auto":
             log(t("postponed_open", x=item["name"]))   # di notte un'app aperta si rimanda, sempre
@@ -1285,8 +1502,18 @@ def update_one(item, mode="manual"):
                 rc, _ = run_stream(cmds[kind], lambda l: (log(l), on_line(l)))
             finally:
                 stop.set()
+            exit_code = rc
             ok = rc == 0
-        status = "done" if ok else "error"
+        if ok:
+            set_progress(jid, phase="verify_install", pct=97)
+            status, observed = verify_install(item, log)
+            with lock:
+                restart_action = state["jobs"][jid].get("restart_action")
+                exit_code = state["jobs"][jid].get("exit_code", exit_code)
+            if restart_action:
+                status = "restart"
+        else:
+            status = "error"
         if not ok and "sudo" in "\n".join(lines).lower() and not has_password():
             log(t("need_pw"))
     except Exception as e:
@@ -1306,7 +1533,8 @@ def update_one(item, mode="manual"):
                 state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
         try:
             add_history({"name": item["name"], "from": item.get("installed"), "to": item.get("latest"),
-                         "result": status, "mode": mode})
+                         "result": status, "mode": mode, "observed": observed,
+                         "exit_code": exit_code, "restart_action": state["jobs"][jid].get("restart_action"), "log": redact("\n".join(lines)[-6000:])})
         except Exception:
             pass
 
@@ -1358,9 +1586,11 @@ def do_updates(ids, mode="manual"):
     """Esegue la coda. Lo stato "in corso" viene sempre liberato, anche dopo un errore inatteso.
     Con "Interrompi" si finisce l'installazione in corso e le successive tornano da fare."""
     try:
+        settings = load_settings()
         with lock:
             state["stop"] = False
-            todo = [i for i in state["items"] if i["id"] in ids and not i.get("updated")]
+            todo = [i for i in state["items"] if i["id"] in ids and not i.get("updated")
+                    and not active_snooze(i, settings)]
             for i in todo:
                 state["jobs"][i["id"]] = {"status": "queued", "log": "", "phase": None,
                                           "pct": None, "bytes": None, "total": None}
@@ -1471,11 +1701,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def snapshot(self):
         available, method = self_update_available(), install_method()   # prendono il lock da sole
-        history = load_history()[-100:]
+        history = load_history()
+        settings = load_settings()
         with lock:
             return {
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
-                "scan_error": state["scan_error"], "items": state["items"],
+                "scan_error": state["scan_error"],
+                "items": [{**i, "snooze": active_snooze(i, settings)} for i in state["items"]],
+                "auto_wait": state["auto_wait"], "next_auto": next_auto_attempt(settings),
                 "jobs": state["jobs"], "running": state["running"], "batch": state["batch"],
                 "cleaning": state["cleaning"], "stale": state["stale"],
                 "scan_warnings": state["scan_warnings"], "stopping": state["stop"],
@@ -1485,7 +1718,7 @@ class Handler(BaseHTTPRequestHandler):
                 "password": has_password(),
                 "excluded": load_excluded(),
                 "unchecked": state["unchecked"], "macos": state["macos"],
-                "settings": {**load_settings(), "login": login_enabled(),
+                "settings": {**settings, "login": login_enabled(),
                              "notifier": bool(shutil.which("terminal-notifier", path=ENV["PATH"]))},
             }
 
@@ -1502,6 +1735,10 @@ class Handler(BaseHTTPRequestHandler):
             if page is None:
                 return self.send(500, PAGE_ERROR, "text/plain; charset=utf-8")
             return self.send(200, page, "text/html; charset=utf-8")
+        if u.path == "/favicon.ico":
+            return self.send(204, b"", "image/x-icon")
+        if u.path == "/api/diagnostics":
+            return self.send(200, diagnostic_report())
         if u.path == "/api/state":
             return self.send(200, self.snapshot())
         if u.path == "/api/icon":
@@ -1524,7 +1761,7 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return self.send(400, {"error": "bad length"})
-        if n > 64 * 1024:
+        if n < 0 or n > 64 * 1024:
             return self.send(413, {"error": "too large"})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -1539,11 +1776,29 @@ class Handler(BaseHTTPRequestHandler):
                     state["scanning"] = True
                     threading.Thread(target=do_scan, args=(True,), daemon=True).start()
             return self.send(200, self.snapshot())
+        if u.path == "/api/snooze":
+            jid, choice = body.get("id"), body.get("choice")
+            if not isinstance(jid, str) or choice not in ("day", "week", "version", "resume"):
+                return self.send(400, {"error": "invalid snooze"})
+            with lock:
+                item = next((i for i in state["items"] if i["id"] == jid), None)
+                busy = state["running"] or state["scanning"]
+            if busy:
+                return self.send(409, {"error": t("busy")})
+            if not item:
+                return self.send(404, {"error": "unknown item"})
+            snooze_item(item, choice)
+            return self.send(200, self.snapshot())
         if u.path == "/api/update":
             ids = body.get("ids")
             if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
                 return self.send(400, {"error": "ids must be a list of strings"})
             ids = set(ids)
+            settings = load_settings()
+            with lock:
+                valid = {i["id"] for i in state["items"] if not i.get("updated") and not active_snooze(i, settings)}
+                if state["stale"] or not ids <= valid:
+                    return self.send(409, {"error": "refresh the list or resume postponed apps"})
             with lock:
                 if state["running"] or state["scanning"] or not ids:
                     return self.send(409, {"error": t("busy")})
@@ -1576,26 +1831,35 @@ class Handler(BaseHTTPRequestHandler):
             request_quit()
             return self.send(200, self.snapshot())
         if u.path == "/api/settings":
-            now = dt.datetime.now()
-
-            def change(s):
+            for key in ("daily_check", "auto_update", "login", "only_ac", "avoid_metered"):
+                if key in body and not isinstance(body[key], bool):
+                    return self.send(400, {"error": "expected boolean: " + key})
+            for key in ("check_time", "auto_time"):
+                if key in body and (not isinstance(body[key], str) or not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", body[key])):
+                    return self.send(400, {"error": "invalid time"})
+            if "theme" in body and body["theme"] not in ("system", "light", "dark"):
+                return self.send(400, {"error": "invalid theme"})
+            def change_settings(s):
+                now = dt.datetime.now()
                 for flag, tkey, dkey in (("daily_check", "check_time", "last_check_day"),
                                          ("auto_update", "auto_time", "last_auto_day")):
-                    changed = False
-                    if flag in body and bool(body[flag]) != s[flag]:
-                        s[flag] = bool(body[flag])
-                        changed = True
-                    if tkey in body and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(body[tkey])):
-                        changed = changed or s[tkey] != body[tkey]
-                        s[tkey] = body[tkey]
+                    changed = any(k in body and body[k] != s[k] for k in (flag, tkey))
+                    for k in (flag, tkey):
+                        if k in body:
+                            s[k] = body[k]
                     if changed:
-                        # se l'orario di oggi è già passato si parte domani, mai subito
-                        h, m = map(int, s[tkey].split(":"))
-                        passed = now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+                        passed = now >= schedule_start(s[tkey], now)
                         s[dkey] = now.date().isoformat() if passed else None
-            update_settings(change)
+                for key in ("only_ac", "avoid_metered", "theme"):
+                    if key in body:
+                        s[key] = body[key]
+            update_settings(change_settings)
+            if any(k in body for k in ("auto_update", "auto_time", "only_ac", "avoid_metered")):
+                with lock:
+                    state["auto_wait"] = None
+                    state["auto_retry_at"] = 0
             if "login" in body:
-                set_login(bool(body["login"]))
+                set_login(body["login"])
             return self.send(200, self.snapshot())
         if u.path == "/api/self-update":
             with lock:
