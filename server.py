@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.9.0"   # tenere allineata con CHANGELOG.md
+VERSION = "1.9.1"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -1432,6 +1432,27 @@ def icon_png(app):
 
 # ---------------------------------------------------------------- HTTP
 
+_page = {"html": None}
+PAGE_ERROR = ("Aggiornamenti non riesce a leggere la sua pagina (index.html): macOS gli nega l'accesso alla cartella "
+              "del programma. Chiudilo (aggiornamenti stop) e riaprilo dal Terminale, oppure sposta la cartella fuori "
+              "da Scrivania, Documenti e Download.\n\nAggiornamenti cannot read its page (index.html): macOS denies "
+              "access to the program folder. Stop it (aggiornamenti stop) and start it again from Terminal, or move "
+              "the folder out of Desktop, Documents and Downloads.")
+
+
+def load_page():
+    """La pagina si legge una volta all'avvio e resta in memoria. Se il programma sta su Scrivania,
+    Documenti o Download, macOS può negare le letture successive al processo avviato dall'app sulla
+    Scrivania (permessi di privacy): rileggerla a ogni richiesta faceva cadere la pagina."""
+    if _page["html"] is None:
+        try:
+            with open(os.path.join(ROOT, "index.html"), "rb") as f:
+                _page["html"] = f.read()
+        except OSError as e:
+            log_line("lettura pagina", e)
+    return _page["html"]
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -1477,8 +1498,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403, {"error": "forbidden"})
         u = urlparse(self.path)
         if u.path == "/":
-            with open(os.path.join(ROOT, "index.html"), "rb") as f:
-                return self.send(200, f.read(), "text/html; charset=utf-8")
+            page = load_page()
+            if page is None:
+                return self.send(500, PAGE_ERROR, "text/plain; charset=utf-8")
+            return self.send(200, page, "text/html; charset=utf-8")
         if u.path == "/api/state":
             return self.send(200, self.snapshot())
         if u.path == "/api/icon":
@@ -1660,6 +1683,7 @@ def main():
                 print("Porta già in uso: Aggiornamenti è già attivo.", flush=True)
                 sys.exit(0)
             time.sleep(0.5)
+    load_page()
     threading.Thread(target=do_scan, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     for d in glob.glob(os.path.join(CACHE, "agg-*")):

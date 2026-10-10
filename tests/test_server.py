@@ -203,6 +203,21 @@ class SelfUpdate(Base):
         self.assertIn(["git", "-C", s.ROOT, "merge", "--ff-only", "v9.9.9"], calls)
 
 
+class Page(Base):
+    def test_page_is_served_from_memory_when_disk_read_is_denied(self):
+        s._page["html"] = None
+        first = s.load_page()
+        with patch("builtins.open", side_effect=PermissionError("Operation not permitted")):
+            self.assertEqual(s.load_page(), first)   # come quando macOS nega la Scrivania dopo l'avvio
+        self.assertIn(b"Aggiornamenti", first)
+
+    def test_unreadable_page_gives_clear_error(self):
+        s._page["html"] = None
+        with patch("builtins.open", side_effect=PermissionError("Operation not permitted")):
+            self.assertIsNone(s.load_page())
+        s._page["html"] = None
+
+
 class Api(Base):
     def test_quit_during_update_waits(self):
         s.state["running"] = True

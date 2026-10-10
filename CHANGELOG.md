@@ -2,6 +2,11 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.9.1] - 2026-10-10
+
+### Corretto
+- La pagina poteva smettere di aprirsi (connessione chiusa, pagina bianca) mentre il programma restava attivo. Succede quando la cartella del programma sta sulla Scrivania, in Documenti o in Download e il server è stato avviato dall'app sulla Scrivania: macOS, per i permessi di privacy, a un certo punto gli negava la lettura di `index.html`, che veniva riletta a ogni apertura. Ora la pagina si legge una volta all'avvio e resta in memoria; se non è leggibile nemmeno all'avvio compare un messaggio che spiega cosa fare. Le installazioni con Homebrew non erano colpite.
+
 ## [1.9.0] - 2026-10-09
 
 Porta sul Mac le correzioni e le novità nate con la versione per Windows (0.3.0), dalla revisione indipendente del codice e dai suggerimenti di chi la sta provando.
