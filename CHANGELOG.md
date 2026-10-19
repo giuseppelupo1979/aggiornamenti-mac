@@ -2,6 +2,13 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.10.1] - 2026-10-19
+
+### Corretto
+- L'app sulla Scrivania poteva fallire con il messaggio generico "Il comando è terminato con uno stato non-zero (127)". Causa probabile, non riprodotta: il comando `aggiornamenti` cercava solo `python3`, che Homebrew non crea più dopo alcuni aggiornamenti di Python (qui dal passaggio di `python@3.14` alla 3.14.8_2): ora usa anche i nomi versionati (`python3.14`, `python3.13`…) e verifica che l'interprete funzioni prima di sceglierlo.
+- L'app sulla Scrivania non scarta più gli errori: finiscono nel registro `~/Library/Logs/AggiornamentiMac.log` e l'avviso dice il codice, dove guardare e come avviare il programma dal Terminale. Rigenerala con `aggiornamenti app`.
+- Il riavvio dopo l'auto-aggiornamento non fallisce più se l'interprete da cui era partito il server è stato rimosso da un aggiornamento di Python fatto da Homebrew.
+
 ## [1.10.0] - 2026-10-11
 
 Porta su macOS le dieci migliorie della versione Windows 0.4.0.

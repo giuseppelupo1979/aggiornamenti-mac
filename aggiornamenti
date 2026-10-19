@@ -14,20 +14,26 @@ SELF="${AGGIORNAMENTI_BIN:-$DIR/aggiornamenti}"
 LOG="$HOME/Library/Logs/AggiornamentiMac.log"
 PORT="${AGG_PORT:-8765}"
 
+log() { mkdir -p "$(dirname "$LOG")"; echo "$(date '+%Y-%m-%d %H:%M:%S') aggiornamenti: $*" >> "$LOG"; }
+
+# Python: quello indicato, poi Homebrew (anche solo con il nome versionato, python3.14:
+# dopo alcuni aggiornamenti Homebrew non crea più il comando python3), infine quello di Apple
 PY=""
-for p in "$PYTHON" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [ -n "$p" ] && [ -x "$p" ]; then PY="$p"; break; fi
+for p in "$PYTHON" /opt/homebrew/bin/python3 $(ls -r /opt/homebrew/bin/python3.[0-9]* /usr/local/bin/python3.[0-9]* 2>/dev/null | grep -E 'python3\.[0-9]+$') /usr/local/bin/python3 /usr/bin/python3; do
+  if [ -n "$p" ] && [ -x "$p" ] && "$p" -c "import sys; sys.exit(sys.version_info < (3, 9))" 2>/dev/null; then PY="$p"; break; fi
 done
-[ -n "$PY" ] || { echo "python3 non trovato / python3 not found" >&2; exit 1; }
+[ -n "$PY" ] || { log "python3 non trovato"; echo "python3 non trovato / python3 not found" >&2; exit 1; }
+[ -r "$DIR/server.py" ] || { log "non riesco a leggere $DIR/server.py"; echo "server.py non leggibile: $DIR / cannot read server.py" >&2; exit 1; }
 
 up() { curl -s --max-time 2 -o /dev/null "http://127.0.0.1:$1/api/state"; }
 
 start() { # $1 porta, $2 argomenti extra
   if ! up "$1"; then
-    mkdir -p "$(dirname "$LOG")"
+    log "avvio con $PY"
     nohup "$PY" "$DIR/server.py" $2 < /dev/null >> "$LOG" 2>&1 &
     i=0
     while [ $i -lt 30 ]; do up "$1" && return 0; sleep 0.5; i=$((i + 1)); done
+    log "il server non risponde dopo 15 secondi"
     echo "Il server non risponde: vedi $LOG / Server not responding: see $LOG" >&2
     return 1
   fi
@@ -46,7 +52,15 @@ case "${1:-open}" in
   app)
     APP="$HOME/Desktop/Aggiornamenti.app"
     SCRIPT="$(mktemp -t aggiornamenti).applescript"
-    printf 'do shell script quoted form of "%s" & " open > /dev/null 2>&1"\n' "$SELF" > "$SCRIPT"
+    # gli errori finiscono nel registro e l'avviso dice dove guardare, invece del generico
+    # "Il comando è terminato con uno stato non-zero"
+    cat > "$SCRIPT" <<EOS
+try
+  do shell script quoted form of "$SELF" & " open >> " & quoted form of "$LOG" & " 2>&1"
+on error errMsg number errNum
+  display alert "Aggiornamenti non è partito (codice " & errNum & ")" message "Dettagli nel registro: $LOG" & return & return & "Puoi avviarlo anche dal Terminale con: " & quoted form of "$SELF" as warning
+end try
+EOS
     rm -rf "$APP"
     osacompile -o "$APP" "$SCRIPT" && rm -f "$SCRIPT"
     ICON=/System/Library/PrivateFrameworks/SoftwareUpdate.framework/Versions/A/Resources/SoftwareUpdate.icns

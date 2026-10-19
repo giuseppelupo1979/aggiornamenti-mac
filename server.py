@@ -31,7 +31,7 @@ from network_status import current_cost
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.10.0"   # tenere allineata con CHANGELOG.md
+VERSION = "1.10.1"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -526,7 +526,23 @@ def restart_server():
     time.sleep(1.5)   # lascia alla pagina il tempo di vedere lo stato "restarting"
     os.environ["AGG_RESTARTED"] = "1"
     script = os.path.join(ROOT, "server.py")
-    os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
+    py = python_for_restart()
+    os.execv(py, [py, script] + sys.argv[1:])
+
+
+def python_for_restart():
+    """L'interprete in uso può non esistere più: aggiornando Python, Homebrew cancella la cartella
+    della versione precedente da cui il server era partito. In quel caso si usa un Python ancora
+    installato, nello stesso ordine del comando aggiornamenti."""
+    if os.access(sys.executable, os.X_OK):
+        return sys.executable
+    brew = sorted(glob.glob("/opt/homebrew/bin/python3.[0-9]*") + glob.glob("/usr/local/bin/python3.[0-9]*"),
+                  key=lambda p: vparts(os.path.basename(p)), reverse=True)
+    for p in ["/opt/homebrew/bin/python3"] + [b for b in brew if re.search(r"python3\.\d+$", b)] + \
+             ["/usr/local/bin/python3", "/usr/bin/python3"]:
+        if os.access(p, os.X_OK):
+            return p
+    return sys.executable
 
 
 def do_self_update():

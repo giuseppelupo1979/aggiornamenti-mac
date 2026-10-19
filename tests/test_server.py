@@ -466,5 +466,16 @@ class MacVerification(Base):
                 self.assertIs(s.on_ac_power(), expected)
 
 
+
+class Restart(unittest.TestCase):
+    def test_restart_uses_installed_python_when_current_was_removed(self):
+        def access(path, mode):
+            return path == "/opt/homebrew/bin/python3.14"
+        with patch.object(s.sys, "executable", "/opt/homebrew/Cellar/python@3.14/3.14.8_1/bin/python3.14"), \
+             patch.object(s.os, "access", side_effect=access), \
+             patch.object(s.glob, "glob", side_effect=lambda pat: ["/opt/homebrew/bin/python3.14", "/opt/homebrew/bin/python3.14-config",
+                                                                  "/opt/homebrew/bin/python3.13"] if "homebrew" in pat else []):
+            self.assertEqual(s.python_for_restart(), "/opt/homebrew/bin/python3.14")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
