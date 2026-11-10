@@ -2,6 +2,24 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.11.0] - 2026-11-10
+
+### Sicurezza
+- **Codice di accesso ai comandi.** Il server accetta comandi solo con un codice casuale salvato in `~/Library/Application Support/AggiornamentiMac/token` (leggibile solo dal tuo utente). Lo ricevono l'app sulla Scrivania, l'icona nella barra dei menu, le notifiche e il comando `aggiornamenti`, che aprono la pagina con il codice nell'indirizzo; la pagina lo conserva e lo toglie subito dalla barra degli indirizzi. Prima bastava conoscere la porta per far partire installazioni, anche con la password di amministratore salvata. Limite dichiarato: un programma che gira già con il tuo utente può leggere il codice, come può leggere la password nel Portachiavi con lo strumento `security`; il codice ferma siti web e programmi che conoscono solo la porta.
+- **Firma degli aggiornamenti Sparkle (EdDSA).** Se l'app installata dichiara una chiave pubblica (`SUPublicEDKey`), il file scaricato deve avere una firma `sparkle:edSignature` valida per quella chiave, come pretende Sparkle stesso; altrimenti l'aggiornamento è annullato. Verifica Ed25519 (RFC 8032) scritta con la sola libreria standard, provata sui vettori ufficiali e su un aggiornamento reale di DockDoor (un file alterato di un bit viene rifiutato).
+
+### Aggiunto
+- **Icona nella barra dei menu.** `aggiornamenti app` crea sulla Scrivania una vera app (compilata con swiftc, già presente con gli strumenti richiesti da Homebrew) che avvia il server, apre la pagina e resta nella barra dei menu con il numero di aggiornamenti: Apri, Controlla ora, Esci. Parte da sola anche quando il server si avvia all'accesso; si spegne in Controllo automatico. Senza swiftc resta il lanciatore semplice di prima.
+- **Novità prima di aggiornare.** Accanto alla versione: le note dello sviluppatore per le app Sparkle (mostrate come testo, senza eseguire nulla), il sito per le app di Homebrew, la scheda dell'App Store, la pagina della formula per gli strumenti da riga di comando.
+- **Ripristina la versione precedente.** Prima di aggiornare un'app ne viene conservata una copia per 7 giorni (fino a 2 GB per app, attivo di serie, si spegne in Controllo automatico). Nello Storico, **Ripristina** la rimette al suo posto. Per le app gestite da Homebrew il ripristino vale fino al prossimo aggiornamento: escludila se vuoi restare alla versione vecchia. Le copie scadute si cancellano con la pulizia.
+
+### Corretto
+- **Python stabile per chi installa con Homebrew.** La formula dipende ora da `python@3.13` e lo usa per percorso fisso: gli aggiornamenti di Python di Homebrew (nell'ultimo mese il comando `python3` è sparito e poi è passato alla 3.15) non possono più impedire l'avvio.
+
+### Verifica
+- 70 test automatici (codice di accesso, firme corrette e manomesse, note, copia e ripristino reali su disco); su GitHub anche la compilazione dell'app per la barra dei menu.
+- Prove sul Mac reale: pagina senza codice bloccata e con codice funzionante, link alle novità, app nella barra dei menu che avvia il server. Nessun aggiornamento di terze parti installato durante le prove; il ripristino è provato solo nei test, su un'app finta.
+
 ## [1.10.1] - 2026-10-19
 
 ### Corretto

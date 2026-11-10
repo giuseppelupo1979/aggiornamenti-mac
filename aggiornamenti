@@ -13,6 +13,9 @@ DIR="${AGGIORNAMENTI_HOME:-$(cd "$(dirname "$0")" && pwd)}"
 SELF="${AGGIORNAMENTI_BIN:-$DIR/aggiornamenti}"
 LOG="$HOME/Library/Logs/AggiornamentiMac.log"
 PORT="${AGG_PORT:-8765}"
+TOKEN_FILE="$HOME/Library/Application Support/AggiornamentiMac/token"
+# la pagina accetta comandi solo con il codice che il server scrive in TOKEN_FILE
+page() { open "http://127.0.0.1:$1/#t=$(cat "$TOKEN_FILE" 2>/dev/null)"; }
 
 log() { mkdir -p "$(dirname "$LOG")"; echo "$(date '+%Y-%m-%d %H:%M:%S') aggiornamenti: $*" >> "$LOG"; }
 
@@ -41,7 +44,7 @@ start() { # $1 porta, $2 argomenti extra
 
 case "${1:-open}" in
   open)
-    start "$PORT" && open "http://127.0.0.1:$PORT" ;;
+    start "$PORT" && page "$PORT" ;;
   start)
     start "$PORT" ;;
   stop)
@@ -51,6 +54,41 @@ case "${1:-open}" in
     start 8766 --demo && open "http://127.0.0.1:8766" ;;
   app)
     APP="$HOME/Desktop/Aggiornamenti.app"
+    ICON=/System/Library/PrivateFrameworks/SoftwareUpdate.framework/Versions/A/Resources/SoftwareUpdate.icns
+    # app vera con l'icona nella barra dei menu, se c'è il compilatore Swift (strumenti da riga di
+    # comando di Apple, già richiesti da Homebrew); altrimenti il semplice lanciatore AppleScript
+    if command -v swiftc > /dev/null 2>&1 && [ -f "$DIR/menubar.swift" ]; then
+      BUILD="$(mktemp -d -t aggiornamenti-app)"
+      mkdir -p "$BUILD/Aggiornamenti.app/Contents/MacOS" "$BUILD/Aggiornamenti.app/Contents/Resources"
+      if swiftc -O -o "$BUILD/Aggiornamenti.app/Contents/MacOS/Aggiornamenti" "$DIR/menubar.swift" >> "$LOG" 2>&1; then
+        V=$(sed -n 's/^VERSION = "\(.*\)".*/\1/p' "$DIR/server.py")
+        cat > "$BUILD/Aggiornamenti.app/Contents/Info.plist" <<EOP
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>com.aggiornamenti-mac.bar</string>
+  <key>CFBundleName</key><string>Aggiornamenti</string>
+  <key>CFBundleExecutable</key><string>Aggiornamenti</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$V</string>
+  <key>CFBundleIconFile</key><string>applet</string>
+  <key>LSUIElement</key><true/>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>AGGLauncher</key><string>$SELF</string>
+  <key>AGGLog</key><string>$LOG</string>
+</dict></plist>
+EOP
+        [ -f "$ICON" ] && cp "$ICON" "$BUILD/Aggiornamenti.app/Contents/Resources/applet.icns"
+        codesign --force --deep -s - "$BUILD/Aggiornamenti.app" > /dev/null 2>&1
+        osascript -e 'tell application id "com.aggiornamenti-mac.bar" to quit' > /dev/null 2>&1
+        rm -rf "$APP" && mv "$BUILD/Aggiornamenti.app" "$APP" && rm -rf "$BUILD"
+        touch "$APP"
+        echo "$APP"
+        exit 0
+      fi
+      rm -rf "$BUILD"
+      log "compilazione dell'icona nella barra dei menu non riuscita: uso il lanciatore semplice"
+    fi
     SCRIPT="$(mktemp -t aggiornamenti).applescript"
     # gli errori finiscono nel registro e l'avviso dice dove guardare, invece del generico
     # "Il comando è terminato con uno stato non-zero"
@@ -63,7 +101,6 @@ end try
 EOS
     rm -rf "$APP"
     osacompile -o "$APP" "$SCRIPT" && rm -f "$SCRIPT"
-    ICON=/System/Library/PrivateFrameworks/SoftwareUpdate.framework/Versions/A/Resources/SoftwareUpdate.icns
     if [ -f "$ICON" ]; then
       cp "$ICON" "$APP/Contents/Resources/applet.icns"
       rm -f "$APP/Contents/Resources/Assets.car"

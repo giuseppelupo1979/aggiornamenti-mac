@@ -10,6 +10,7 @@ Fonti:
 Solo libreria standard. Ascolta soltanto su 127.0.0.1.
 """
 
+import base64
 import concurrent.futures as cf
 import copy
 import datetime as dt
@@ -19,6 +20,7 @@ import json
 import os
 import plistlib
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -27,11 +29,13 @@ import threading
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+
+import ed25519_verify
 from network_status import current_cost
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.10.1"   # tenere allineata con CHANGELOG.md
+VERSION = "1.11.0"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -52,6 +56,12 @@ SUPPORT = (tempfile.mkdtemp(prefix="aggiornamenti-demo-") if DEMO
 EXCLUDED_FILE = os.path.join(SUPPORT, "esclusi.json")
 SETTINGS_FILE = os.path.join(SUPPORT, "impostazioni.json")
 HISTORY_FILE = os.path.join(SUPPORT, "storico.json")
+TOKEN_FILE = os.path.join(SUPPORT, "token")             # codice che la pagina e l'icona allegano ai comandi
+BACKUP_DIR = os.path.join(SUPPORT, "versioni-precedenti")
+BACKUP_DAYS = 7                     # le versioni precedenti si tengono una settimana
+BACKUP_MAX = 2 * 1024 ** 3          # app più grandi di 2 GB non vengono copiate
+MENUBAR_ID = "com.aggiornamenti-mac.bar"
+MENUBAR_APP = os.path.expanduser("~/Desktop/Aggiornamenti.app")
 LOG_FILE = (os.path.join(SUPPORT, "eventi.log") if DEMO or os.environ.get("AGG_DATA_DIR")
             else os.path.expanduser("~/Library/Logs/AggiornamentiMac-eventi.log"))
 LAUNCH_LABEL = "com.aggiornamenti-mac"
@@ -118,6 +128,16 @@ MESSAGES = {
                 + ("{x} did not quit (it may be asking to save a document): choose whether to force it or postpone.",) * 2,
     "postponed_open": ("{x} è aperta: rimandata al prossimo giro.",) * 2 + ("{x} is open: postponed to the next run.",) * 2,
     "reopen_failed": ("Aggiornata, ma non sono riuscito a riaprirla: {x}",) * 2 + ("Updated, but could not reopen it: {x}",) * 2,
+    "ed_missing": ("L'app dichiara una chiave di firma ma l'aggiornamento non è firmato: annullato per sicurezza",) * 2
+                  + ("The app declares a signing key but the update is not signed: cancelled for safety",) * 2,
+    "ed_bad": ("La firma dello sviluppatore non corrisponde al file scaricato: annullato per sicurezza",) * 2
+              + ("The developer's signature does not match the downloaded file: cancelled for safety",) * 2,
+    "ed_ok": ("Firma dello sviluppatore verificata (Ed25519)",) * 2 + ("Developer signature verified (Ed25519)",) * 2,
+    "backup_done": ("Copia della versione {x} conservata per 7 giorni",) * 2 + ("Version {x} kept for 7 days",) * 2,
+    "backup_big": ("App più grande di 2 GB: versione precedente non conservata",) * 2
+                  + ("App larger than 2 GB: previous version not kept",) * 2,
+    "rollback_open": ("Chiudi {x} e riprova: deve essere chiusa per tornare alla versione precedente.",) * 2
+                     + ("Quit {x} and try again: it must be closed to go back to the previous version.",) * 2,
     "scan_brew": ("Homebrew non ha risposto",) * 2 + ("Homebrew did not respond",) * 2,
     "busy": ("Attendi la fine dell'operazione in corso",) * 2 + ("Wait for the current operation to finish",) * 2,
     "bad_pw": ("Password non corretta",) * 2 + ("Wrong password",) * 2,
@@ -154,6 +174,7 @@ state = {
     "auto_retry_at": 0,
     "quit_after": False,  # "Esci" chiesto durante un aggiornamento: si esce alla fine
     "quitting": False,
+    "restore": None,      # ripristino in corso o appena finito: {id, status, log}
     # nuova versione di Aggiornamenti stesso: {latest, url, notes, checked_at, status, log}
     "self": {"latest": None, "url": None, "notes": "", "checked_at": 0, "status": None, "log": ""},
 }
@@ -169,6 +190,28 @@ def item_key(item):
 
 
 files_lock = threading.RLock()   # impostazioni, esclusioni e storico: mai due scritture insieme
+
+
+def load_token():
+    """Codice casuale, uguale tra un riavvio e l'altro, leggibile solo dall'utente. Lo allegano ai
+    comandi la pagina (lo riceve nell'indirizzo da chi la apre), l'icona nella barra dei menu e le
+    notifiche: un altro sito o un programma che conosce solo la porta non può comandare il server."""
+    try:
+        with open(TOKEN_FILE, encoding="utf-8") as f:
+            tok = f.read().strip()
+        if len(tok) >= 32:
+            return tok
+    except OSError:
+        pass
+    tok = secrets.token_urlsafe(32)
+    fd = os.open(TOKEN_FILE + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(tok)
+    os.replace(TOKEN_FILE + ".tmp", TOKEN_FILE)
+    return tok
+
+
+TOKEN = load_token()
 
 
 def log_line(*parts):
@@ -234,6 +277,8 @@ DEFAULT_SETTINGS = {
     "last_auto": None,       # {at, updated, failed, postponed}
     "last_cleanup": None,    # {at, freed}
     "only_ac": True, "avoid_metered": True, "theme": "system", "snoozed": {},
+    "keep_previous": True,   # conserva per 7 giorni la versione precedente delle app (Ripristina)
+    "menubar": True,         # icona nella barra dei menu, se l'app Aggiornamenti è sulla Scrivania
 }
 
 
@@ -449,7 +494,7 @@ def notify(title, message):
         return
     tn = shutil.which("terminal-notifier", path=ENV["PATH"])
     if tn:
-        run([tn, "-title", title, "-message", message, "-open", PAGE_URL,
+        run([tn, "-title", title, "-message", message, "-open", f"{PAGE_URL}/#t={TOKEN}",
              "-group", "aggiornamenti-mac"], timeout=30)
     else:
         esc = lambda t: t.replace("\\", "\\\\").replace('"', '\\"')
@@ -917,6 +962,7 @@ def installed_apps():
                 "version": str(info.get("CFBundleShortVersionString") or info.get("CFBundleVersion") or ""),
                 "build": str(info.get("CFBundleVersion") or ""),
                 "feed": info.get("SUFeedURL"),
+                "ed_key": info.get("SUPublicEDKey"),
                 "mas": os.path.exists(os.path.join(app, "Contents", "_MASReceipt")),
             })
     return apps
@@ -1047,8 +1093,23 @@ def sparkle_latest(feed):
         if not build:
             continue
         if best is None or vparts(build) > vparts(best["build"]):
-            best = {"build": build, "short": short, "url": enc.get("url")}
+            notes = (item.findtext(SPARKLE_NS + "fullReleaseNotesLink") or item.findtext(SPARKLE_NS + "releaseNotesLink") or "").strip()
+            best = {"build": build, "short": short, "url": enc.get("url"),
+                    "ed_sig": enc.get(SPARKLE_NS + "edSignature"),
+                    "notes_url": notes if notes.startswith("https://") else None,
+                    "notes_text": html_to_text(item.findtext("description") or "")[:4000] or None}
     return best
+
+
+def html_to_text(html):
+    """Note di versione Sparkle (HTML) ridotte a testo semplice, da mostrare senza eseguire nulla."""
+    text = re.sub(r"(?is)<(script|style).*?</\1>", "", html)
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</li>|</h\d>", "\n", text)
+    text = re.sub(r"(?i)<li[^>]*>", "• ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    for a, b in (("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"), ("&amp;", "&")):
+        text = text.replace(a, b)
+    return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
 def scan_apps(managed_casks):
@@ -1112,6 +1173,9 @@ def scan_apps(managed_casks):
                 "name": a["name"], "installed": a["version"], "latest": best["short"],
                 "source": "developer", "path": a["path"], "bundle_id": a["bundle_id"],
                 "url": best["url"], "major": is_major(best["short"], a["version"]),
+                "ed_key": a.get("ed_key"), "ed_sig": best.get("ed_sig"),
+                "notes": {"url": best.get("notes_url"), "text": best.get("notes_text"), "kind": "notes"}
+                if best.get("notes_url") or best.get("notes_text") else None,
             }
         return None
 
@@ -1119,6 +1183,20 @@ def scan_apps(managed_casks):
         items += [r for r in ex.map(check, sparkle) if r]
     unchecked.sort(key=lambda u: u["name"].lower())
     return items, unchecked
+
+
+def notes_for(item):
+    """Dove leggere le novità: le note dello sviluppatore se il canale Sparkle le indica, altrimenti
+    la pagina del programma (sito dichiarato nel catalogo Homebrew, scheda dell'App Store)."""
+    kind = item["kind"]
+    if kind in ("cask", "adopt"):
+        home = cask_by_token(item["token"]).get("homepage")
+        return {"url": home, "kind": "site"} if home and home.startswith("https://") else None
+    if kind == "formula":
+        return {"url": f"https://formulae.brew.sh/formula/{item['token']}", "kind": "site"}
+    if kind == "mas":
+        return {"url": f"https://apps.apple.com/app/id{item['token']}", "kind": "store"}
+    return None
 
 
 def attach_paths(items):
@@ -1198,7 +1276,11 @@ def demo_scan():
         path = f"/Applications/{name}.app"
         items.append({"id": f"{kind}:{token}", "kind": kind, "token": token, "name": name,
                       "installed": cur, "latest": new, "source": source, "major": major,
-                      "path": path if os.path.exists(path) else None, "key": f"{kind}:{token}"})
+                      "path": path if os.path.exists(path) else None, "key": f"{kind}:{token}",
+                      "notes": {"kind": "notes", "url": None,
+                                "text": f"{name} {new}\n• Demo: miglioramenti di stabilità\n• Demo: correzioni minori"}
+                      if kind == "sparkle" else notes_for({"kind": kind, "token": token}) if kind in ("mas", "formula")
+                      else {"kind": "site", "url": "https://example.com/"}})
     with lock:
         state["items"] = items
         state["jobs"] = {}
@@ -1231,8 +1313,15 @@ def demo_update(item, mode="manual"):
     with lock:
         state["jobs"][jid]["status"] = "done"
         state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
+    backup = None
+    if item["kind"] in ("cask", "adopt", "sparkle"):   # copia finta: solo la descrizione, niente file
+        backup = re.sub(r"[^A-Za-z0-9._-]+", "_", item["key"])
+        os.makedirs(os.path.join(BACKUP_DIR, backup), exist_ok=True)
+        with open(os.path.join(BACKUP_DIR, backup, "info.json"), "w", encoding="utf-8") as f:
+            json.dump({"name": item["name"], "version": item["installed"], "path": item.get("path") or "",
+                       "at": time.time(), "size": 0, "demo": True}, f)
     add_history({"name": item["name"], "from": item["installed"], "to": item["latest"], "result": "done", "mode": mode,
-                 "observed": item["latest"], "exit_code": 0, "log": "Demo: installed version verified."})
+                 "observed": item["latest"], "exit_code": 0, "log": "Demo: installed version verified.", "backup": backup})
 
 
 def do_scan(force_self_check=False):
@@ -1265,9 +1354,13 @@ def do_scan(force_self_check=False):
         items = attach_paths(items)
         for it in items:
             it["key"] = item_key(it)
+            if not it.get("notes"):
+                it["notes"] = notes_for(it)
         order = {"cask": 0, "adopt": 0, "sparkle": 0, "mas": 0, "formula": 1}
         items.sort(key=lambda i: (order[i["kind"]], i["name"].lower()))
         with lock:
+            if state["restore"] and state["restore"]["status"] != "running":
+                state["restore"] = None   # l'esito di un ripristino resta visibile fino al controllo successivo
             state.update(items=items, unchecked=unchecked, macos=macos or [], scan_error=None,
                          scan_warnings=warnings, scanned_at=time.time(), stale=False)
             state["jobs"] = {k: v for k, v in state["jobs"].items() if v["status"] == "running"}
@@ -1376,6 +1469,28 @@ def install_pkg(pkg, old_team, jid, log):
     return rc == 0
 
 
+def check_ed_signature(item, archive, log):
+    """Firma Sparkle EdDSA: se l'app installata dichiara una chiave pubblica (SUPublicEDKey) il file
+    scaricato deve essere firmato con quella chiave, come pretende Sparkle stesso. Senza chiave
+    restano i controlli di sempre (firma Apple e stesso sviluppatore)."""
+    key = item.get("ed_key")
+    if not key:
+        return True
+    sig = item.get("ed_sig")
+    if not sig:
+        log(t("ed_missing"))
+        return False
+    try:
+        with open(archive, "rb") as f:
+            data = f.read()
+        ok = ed25519_verify.verify(base64.b64decode(key), data, base64.b64decode(sig))
+    except Exception as e:
+        log_line("firma ed25519", e)
+        ok = False
+    log(t("ed_ok") if ok else t("ed_bad"))
+    return ok
+
+
 def install_sparkle(item, log):
     url, dest, jid = item["url"], item["path"], item["id"]
     old_team = team_id(dest)
@@ -1395,6 +1510,8 @@ def install_sparkle(item, log):
                 if time.time() - last > 0.3:
                     last = time.time()
                     set_progress(jid, bytes=got, pct=round(3 + 67 * got / total, 1) if total else None)
+        if not check_ed_signature(item, archive, log):
+            return False
         set_progress(jid, phase="unpack", pct=72, bytes=None, total=None)
         lower = fname.lower()
         new_app, mount = None, None
@@ -1458,6 +1575,134 @@ def install_sparkle(item, log):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def dir_size(path):
+    rc, out = run(["du", "-sk", path], timeout=120)
+    try:
+        return int(out.split()[0]) * 1024
+    except (ValueError, IndexError):
+        return None
+
+
+def backup_app(item, log):
+    """Prima di sostituire un'app ne conserva una copia (ditto mantiene firme e permessi), per
+    poterla ripristinare dallo Storico. Una copia per app, valida BACKUP_DAYS giorni."""
+    path = item.get("path")
+    if item["kind"] not in ("cask", "adopt", "sparkle") or not path or not os.path.isdir(path):
+        return None
+    if not load_settings().get("keep_previous", True):
+        return None
+    size = dir_size(path)
+    if size is None or size > BACKUP_MAX:
+        log(t("backup_big"))
+        return None
+    bid = re.sub(r"[^A-Za-z0-9._-]+", "_", item["key"])
+    dest = os.path.join(BACKUP_DIR, bid)
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest, exist_ok=True)
+    copy = os.path.join(dest, os.path.basename(path))
+    rc, out = run(["ditto", path, copy], timeout=1800)
+    if rc != 0:
+        shutil.rmtree(dest, ignore_errors=True)
+        log_line("copia versione precedente", item["name"], out.strip()[-300:])
+        return None
+    with open(os.path.join(dest, "info.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": item["name"], "version": item.get("installed"), "path": path,
+                   "bundle_id": item.get("bundle_id"), "at": time.time(), "size": size}, f, ensure_ascii=False)
+    log(t("backup_done", x=item.get("installed") or "?"))
+    return bid
+
+
+def drop_backup(bid):
+    if bid:
+        shutil.rmtree(os.path.join(BACKUP_DIR, bid), ignore_errors=True)
+
+
+def list_backups():
+    out = {}
+    for info_path in glob.glob(os.path.join(BACKUP_DIR, "*", "info.json")):
+        try:
+            with open(info_path, encoding="utf-8") as f:
+                info = json.load(f)
+        except Exception:
+            continue
+        if time.time() - info.get("at", 0) < BACKUP_DAYS * 86400:
+            out[os.path.basename(os.path.dirname(info_path))] = info
+    return out
+
+
+def prune_backups():
+    """Cancella le copie scadute (o rimaste senza descrizione). Restituisce i byte liberati."""
+    freed = 0
+    for d in glob.glob(os.path.join(BACKUP_DIR, "*")):
+        try:
+            with open(os.path.join(d, "info.json"), encoding="utf-8") as f:
+                info = json.load(f)
+        except Exception:
+            info = {}
+        if time.time() - info.get("at", 0) >= BACKUP_DAYS * 86400:
+            freed += info.get("size") or 0
+            shutil.rmtree(d, ignore_errors=True)
+    return freed
+
+
+def restore_backup(bid):
+    """Rimette la versione conservata al posto di quella attuale. L'app deve essere chiusa."""
+    with lock:
+        state["restore"] = {"id": bid, "status": "running", "log": ""}
+
+    def log(text):
+        with lock:
+            state["restore"]["log"] = (state["restore"]["log"] + "\n" + text).strip()[-4000:]
+
+    ok = False
+    info = list_backups().get(bid)
+    try:
+        if not info:
+            raise RuntimeError("versione precedente non trovata o scaduta")
+        if DEMO or info.get("demo"):   # in demo si simula soltanto: nessuna app viene toccata
+            time.sleep(2)
+            drop_backup(bid)
+            add_history({"name": info["name"], "from": None, "to": info.get("version"), "result": "restored", "mode": "manual"})
+            ok = True
+            return
+        dest = info["path"]
+        copy = os.path.join(BACKUP_DIR, bid, os.path.basename(dest))
+        if not os.path.isdir(copy):
+            raise RuntimeError("copia mancante")
+        if info.get("bundle_id") and running_app(info["bundle_id"]):
+            if quit_app(info["bundle_id"]) != "closed":
+                raise RuntimeError(t("rollback_open", x=info["name"]))
+        aside = dest + ".agg-nuova"
+        sudo = []
+        try:
+            if os.path.exists(dest):
+                os.rename(dest, aside)
+        except PermissionError:
+            if not has_password():
+                raise RuntimeError(t("need_pw"))
+            sudo = ["sudo", "-A"]
+            rc, out = run(sudo + ["mv", dest, aside], timeout=120)
+            if rc != 0:
+                raise RuntimeError(out.strip())
+        rc, out = run(sudo + ["ditto", copy, dest], timeout=1800)
+        if rc != 0:
+            run(sudo + ["mv", aside, dest], timeout=120)   # si rimette la versione nuova
+            raise RuntimeError(out.strip())
+        run(sudo + ["rm", "-rf", aside], timeout=600)
+        log(f"{info['name']} {info.get('version')}")
+        ok = True
+        drop_backup(bid)
+        add_history({"name": info["name"], "from": None, "to": info.get("version"), "result": "restored",
+                     "mode": "manual"})
+    except Exception as e:
+        log(str(e))
+        log_line("ripristino", bid, e)
+    finally:
+        with lock:
+            state["restore"]["status"] = "done" if ok else "error"
+            state["running"] = False
+
+
 def update_one(item, mode="manual"):
     """Aggiorna un'app. mode: "manual" (dalla pagina), "auto" (di notte: mai chiudere nulla),
     "force" (l'utente ha chiesto di chiudere d'autorità l'app aperta).
@@ -1475,7 +1720,7 @@ def update_one(item, mode="manual"):
                 state["jobs"][jid]["log"] = "\n".join(lines)[-6000:]
 
     status, was_running = "error", False
-    observed, exit_code = None, None
+    observed, exit_code, backup = None, None, None
     bid = item.get("bundle_id")
     try:
         if mode == "auto":
@@ -1500,6 +1745,7 @@ def update_one(item, mode="manual"):
                 was_running, status = False, "blocked"   # la pagina offre "Forza chiusura" o "Rimanda"
                 return
 
+        backup = backup_app(item, log)
         kind, token = item["kind"], item["token"]
         cmds = {
             "cask": [BREW, "upgrade", "--cask", "--greedy", token],
@@ -1547,9 +1793,12 @@ def update_one(item, mode="manual"):
             state["jobs"][jid]["status"] = status
             if status == "done":
                 state["items"] = [{**i, "updated": True} if i["id"] == jid else i for i in state["items"]]
+        if status not in ("done", "verify", "restart"):
+            drop_backup(backup)   # la versione precedente è ancora quella installata
+            backup = None
         try:
             add_history({"name": item["name"], "from": item.get("installed"), "to": item.get("latest"),
-                         "result": status, "mode": mode, "observed": observed,
+                         "result": status, "mode": mode, "observed": observed, "backup": backup,
                          "exit_code": exit_code, "restart_action": state["jobs"][jid].get("restart_action"), "log": redact("\n".join(lines)[-6000:])})
         except Exception:
             pass
@@ -1582,6 +1831,7 @@ def cleanup():
                        if not os.path.islink(os.path.join(r, f)))
             shutil.rmtree(d, ignore_errors=True)
             freed += size
+        freed += prune_backups()
         # icone di versioni ormai sostituite: si rigenerano al bisogno
         icons = os.path.join(CACHE, "icons")
         if os.path.isdir(icons):
@@ -1719,6 +1969,8 @@ class Handler(BaseHTTPRequestHandler):
         available, method = self_update_available(), install_method()   # prendono il lock da sole
         history = load_history()
         settings = load_settings()
+        backups = list_backups()
+        excluded = load_excluded()
         with lock:
             return {
                 "scanning": state["scanning"], "scanned_at": state["scanned_at"],
@@ -1729,14 +1981,23 @@ class Handler(BaseHTTPRequestHandler):
                 "cleaning": state["cleaning"], "stale": state["stale"],
                 "scan_warnings": state["scan_warnings"], "stopping": state["stop"],
                 "quitting": state["quitting"], "quit_after": state["quit_after"], "history": history,
+                "backups": backups, "restore": state["restore"],
+                "pending_count": len([i for i in state["items"] if not i.get("updated") and i.get("key") not in excluded
+                                      and not active_snooze(i, settings)]),
                 "version": VERSION, "lang": LANG, "demo": DEMO,
                 "self": {**state["self"], "available": available, "method": method},
                 "password": has_password(),
-                "excluded": load_excluded(),
+                "excluded": excluded,
                 "unchecked": state["unchecked"], "macos": state["macos"],
                 "settings": {**settings, "login": login_enabled(),
                              "notifier": bool(shutil.which("terminal-notifier", path=ENV["PATH"]))},
             }
+
+    def token_ok(self):
+        if DEMO:
+            return True   # la demo non tocca il sistema
+        given = self.headers.get("X-Agg-Token") or ""
+        return secrets.compare_digest(given.encode(), TOKEN.encode())
 
     def host_ok(self):
         # difesa dal DNS rebinding: si risponde solo a chi ci chiama col nostro nome
@@ -1753,6 +2014,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, page, "text/html; charset=utf-8")
         if u.path == "/favicon.ico":
             return self.send(204, b"", "image/x-icon")
+        if u.path.startswith("/api/") and u.path != "/api/icon" and not self.token_ok():
+            return self.send(401, {"error": "token"})
         if u.path == "/api/diagnostics":
             return self.send(200, diagnostic_report())
         if u.path == "/api/state":
@@ -1785,7 +2048,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400, {"error": "invalid json"})
         if not isinstance(body, dict):
             return self.send(400, {"error": "expected an object"})
+        if not self.token_ok():
+            return self.send(401, {"error": "token"})
         u = urlparse(self.path)
+        if u.path == "/api/rollback":
+            bid = body.get("id")
+            if not isinstance(bid, str) or bid not in list_backups():
+                return self.send(404, {"error": "not found"})
+            with lock:
+                if state["running"] or state["scanning"]:
+                    return self.send(409, {"error": t("busy")})
+                state["running"] = True
+            threading.Thread(target=restore_backup, args=(bid,), daemon=True).start()
+            return self.send(200, self.snapshot())
         if u.path == "/api/scan":
             with lock:
                 if not state["scanning"] and not state["running"]:
@@ -1847,7 +2122,7 @@ class Handler(BaseHTTPRequestHandler):
             request_quit()
             return self.send(200, self.snapshot())
         if u.path == "/api/settings":
-            for key in ("daily_check", "auto_update", "login", "only_ac", "avoid_metered"):
+            for key in ("daily_check", "auto_update", "login", "only_ac", "avoid_metered", "keep_previous", "menubar"):
                 if key in body and not isinstance(body[key], bool):
                     return self.send(400, {"error": "expected boolean: " + key})
             for key in ("check_time", "auto_time"):
@@ -1866,7 +2141,7 @@ class Handler(BaseHTTPRequestHandler):
                     if changed:
                         passed = now >= schedule_start(s[tkey], now)
                         s[dkey] = now.date().isoformat() if passed else None
-                for key in ("only_ac", "avoid_metered", "theme"):
+                for key in ("only_ac", "avoid_metered", "theme", "keep_previous", "menubar"):
                     if key in body:
                         s[key] = body[key]
             update_settings(change_settings)
@@ -1947,6 +2222,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
 
+def start_menubar():
+    """Apre l'icona nella barra dei menu (l'app Aggiornamenti sulla Scrivania) se non è già attiva:
+    serve quando il server parte da solo all'accesso."""
+    if DEMO or not load_settings().get("menubar", True):
+        return
+    info = read_info(MENUBAR_APP) or {}
+    if info.get("CFBundleIdentifier") != MENUBAR_ID:
+        return   # app vecchia (solo lanciatore) o assente: niente icona
+    try:
+        if not running_app(MENUBAR_ID):
+            run(["open", "-g", "-j", MENUBAR_APP, "--args", "--background"], timeout=30)
+    except Exception as e:
+        log_line("icona barra dei menu", e)
+
+
 def main():
     if not os.access(ASKPASS, os.X_OK):
         os.chmod(ASKPASS, 0o755)
@@ -1964,6 +2254,7 @@ def main():
                 sys.exit(0)
             time.sleep(0.5)
     load_page()
+    start_menubar()
     threading.Thread(target=do_scan, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     for d in glob.glob(os.path.join(CACHE, "agg-*")):

@@ -75,7 +75,7 @@ La modalità demo mostra app di esempio e simula gli aggiornamenti su una porta 
 | `aggiornamenti` | avvia il server se serve e apre http://127.0.0.1:8765 |
 | `aggiornamenti start` / `stop` | avvia o ferma il server senza aprire la pagina |
 | `aggiornamenti demo` | modalità demo con dati di esempio |
-| `aggiornamenti app` | crea l'app Aggiornamenti sulla Scrivania |
+| `aggiornamenti app` | crea l'app Aggiornamenti sulla Scrivania, con l'icona nella barra dei menu |
 | `aggiornamenti version` | mostra la versione |
 
 Per usare una porta diversa dalla 8765 imposta `AGG_PORT` (per esempio `AGG_PORT=9000 aggiornamenti`).
@@ -89,6 +89,9 @@ Il manuale d'uso completo è in [MANUALE.md](MANUALE.md), le novità di ogni ver
 - **La password di amministratore è facoltativa e sta solo nel Portachiavi** (voce `aggiornamenti-mac`). Viene verificata prima di essere salvata, non viene mai scritta su disco né compare nei processi, e si rimuove dalla pagina in qualsiasi momento.
 - **Le app installate a mano passano sotto Homebrew** al primo aggiornamento fatto da qui (`brew install --cask --force` sostituisce la copia esistente). Se non lo vuoi, escludile.
 - **I download Sparkle sono verificati:** app e `.pkg` si installano solo se la firma è valida e appartiene allo stesso sviluppatore (Team ID) della versione installata.
+- **Firma degli sviluppatori:** se l'app dichiara una chiave di firma (`SUPublicEDKey`), l'aggiornamento Sparkle si installa solo con una firma EdDSA valida per quella chiave.
+- **Comandi solo con codice di accesso:** il server accetta comandi solo con un codice casuale salvato nella tua cartella utente, che app, icona nella barra dei menu, notifiche e comando `aggiornamenti` passano alla pagina. Siti web e programmi che conoscono solo la porta non possono avviare installazioni; un programma che gira già con il tuo utente potrebbe leggerlo, come potrebbe leggere la voce del Portachiavi.
+- **Versioni precedenti per 7 giorni** (fino a 2 GB per app), da ripristinare dallo Storico.
 - **L'aggiornamento notturno è prudente:** salta app escluse, versioni maggiori e abbinamenti da verificare, e non chiude mai le app aperte.
 - **Nessuna app viene chiusa d'autorità senza il tuo consenso:** se un'app non si chiude da sola (per esempio perché chiede di salvare), la riga offre *Forza chiusura* o *Rimanda* e decidi tu.
 - **Nessun "tutto aggiornato" per errore:** se Homebrew non risponde la pagina lo dice e mostra l'ultimo elenco valido.

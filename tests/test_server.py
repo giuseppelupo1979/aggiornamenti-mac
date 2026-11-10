@@ -335,7 +335,7 @@ class NewApi(Base):
     def post(self, path, body):
         handler = object.__new__(s.Handler)
         raw = json.dumps(body).encode()
-        handler.headers = {"Host": f"{s.HOST}:{s.PORT}", "Content-Length": str(len(raw))}
+        handler.headers = {"Host": f"{s.HOST}:{s.PORT}", "Content-Length": str(len(raw)), "X-Agg-Token": s.TOKEN}
         handler.path = path
         handler.rfile = io.BytesIO(raw)
         replies = []
@@ -465,6 +465,89 @@ class MacVerification(Base):
             with patch.object(s, "run", return_value=(0, text)):
                 self.assertIs(s.on_ac_power(), expected)
 
+
+
+class Security(NewApi):
+    def test_command_without_token_is_refused(self):
+        handler = object.__new__(s.Handler)
+        raw = b"{}"
+        handler.headers = {"Host": f"{s.HOST}:{s.PORT}", "Content-Length": "2"}
+        handler.path, handler.rfile = "/api/scan", io.BytesIO(raw)
+        replies = []
+        handler.send = lambda code, payload: replies.append((code, payload))
+        handler.do_POST()
+        self.assertEqual(replies[-1][0], 401)
+
+    def test_token_file_is_private_and_stable(self):
+        self.assertEqual(os.stat(s.TOKEN_FILE).st_mode & 0o777, 0o600)
+        self.assertEqual(s.load_token(), s.TOKEN)
+
+    def test_ed25519_rfc8032_vector(self):
+        import ed25519_verify as e
+        pk = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        sig = bytes.fromhex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+        self.assertTrue(e.verify(pk, b"", sig))
+        self.assertFalse(e.verify(pk, b"altro", sig))
+
+    def test_sparkle_update_with_key_but_no_signature_is_refused(self):
+        logs = []
+        self.assertFalse(s.check_ed_signature({"ed_key": "AAAA", "ed_sig": None}, "/nonexistent", logs.append))
+        self.assertTrue(s.check_ed_signature({"ed_key": None}, "/nonexistent", logs.append))
+
+    def test_wrong_sparkle_signature_is_refused(self):
+        import base64
+        pk = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        sig = bytes.fromhex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+        with tempfile.NamedTemporaryFile(dir=SANDBOX.name, delete=False) as f:
+            f.write(b"file manomesso")
+        item = {"ed_key": base64.b64encode(pk).decode(), "ed_sig": base64.b64encode(sig).decode()}
+        self.assertFalse(s.check_ed_signature(item, f.name, lambda x: None))
+        Path(f.name).write_bytes(b"")
+        self.assertTrue(s.check_ed_signature(item, f.name, lambda x: None))
+
+
+class Notes(unittest.TestCase):
+    def test_release_notes_html_becomes_plain_text(self):
+        self.assertEqual(s.html_to_text("<h2>1.2</h2><ul><li>Fix &amp; speed</li></ul><script>x()</script>"),
+                         "1.2\n• Fix & speed")
+
+    def test_notes_link_for_each_source(self):
+        self.assertEqual(s.notes_for({"kind": "mas", "token": "123"})["url"], "https://apps.apple.com/app/id123")
+        self.assertEqual(s.notes_for({"kind": "formula", "token": "node"})["kind"], "site")
+
+
+class Backups(Base):
+    def test_backup_restore_roundtrip(self):
+        app = Path(SANDBOX.name) / "Apps" / "Prova.app"
+        (app / "Contents").mkdir(parents=True, exist_ok=True)
+        (app / "Contents" / "versione").write_text("1.0")
+        item = dict(ITEM, path=str(app), installed="1.0")
+        bid = s.backup_app(item, lambda x: None)
+        self.assertIn(bid, s.list_backups())
+        (app / "Contents" / "versione").write_text("2.0")          # "aggiornamento"
+        s.state["running"] = True
+        with patch.object(s, "running_app", return_value=False):
+            s.restore_backup(bid)
+        self.assertEqual((app / "Contents" / "versione").read_text(), "1.0")
+        self.assertEqual(s.state["restore"]["status"], "done")
+        self.assertFalse(s.state["running"])
+        self.assertNotIn(bid, s.list_backups())
+        self.assertEqual(s.load_history()[-1]["result"], "restored")
+
+    def test_expired_backups_are_pruned(self):
+        d = Path(s.BACKUP_DIR) / "vecchia"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "info.json").write_text(json.dumps({"at": 0, "size": 10}))
+        self.assertGreaterEqual(s.prune_backups(), 10)
+        self.assertFalse(d.exists())
+
+    def test_failed_update_drops_backup(self):
+        with patch.object(s, "running_app", return_value=False), patch.object(s, "backup_app", return_value="b1"), \
+             patch.object(s, "drop_backup") as drop, patch.object(s, "run_stream", return_value=(1, "boom")), \
+             patch.object(s, "remote_size", return_value=None):
+            s.update_one(ITEM)
+        drop.assert_called_with("b1")
+        self.assertIsNone(s.load_history()[-1]["backup"])
 
 
 class Restart(unittest.TestCase):

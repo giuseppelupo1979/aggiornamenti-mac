@@ -24,3 +24,5 @@ jobs:
             sleep 1
           done
           curl -s http://127.0.0.1:8799/ | grep -q Aggiornamenti
+      - name: Menu bar app compiles
+        run: swiftc -typecheck menubar.swift

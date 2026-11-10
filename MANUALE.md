@@ -6,7 +6,9 @@ Aggiornamenti è una piccola pagina web che gira solo sul tuo Mac. Controlla tut
 
 Fai doppio clic sull'app **Aggiornamenti** sulla Scrivania, oppure scrivi `aggiornamenti` nel Terminale. Si apre il browser all'indirizzo `http://127.0.0.1:8765` e parte subito un controllo. Se l'app sulla Scrivania non c'è, la crea il comando `aggiornamenti app`. La prima volta macOS potrebbe chiederti conferma per aprirla: clic destro, poi **Apri**.
 
-Se il programma è già attivo, viene aperta solo la pagina. Puoi anche tenerla tra i preferiti del browser.
+Se il programma è già attivo, viene aperta solo la pagina. Puoi anche tenerla tra i preferiti del browser: dopo la prima apertura dall'app il browser ricorda il codice di accesso. Aperta in un altro browser senza codice, la pagina dice di aprirla dall'app: per sicurezza accetta comandi solo da chi conosce il codice.
+
+**Icona nella barra dei menu.** L'app sulla Scrivania resta in alto a destra con il numero di aggiornamenti disponibili. Dal suo menu: **Apri Aggiornamenti**, **Controlla ora**, **Esci da Aggiornamenti**. Parte da sola anche quando Aggiornamenti si avvia all'accesso. Se non la vuoi, spegnila in *Controllo automatico*. Se hai un'app sulla Scrivania di una versione precedente, ricreala con `aggiornamenti app`.
 
 La pagina è in italiano o in inglese secondo la lingua del Mac. Per provare il programma senza toccare nulla c'è `aggiornamenti demo`: mostra app di esempio e simula gli aggiornamenti, senza modificare il sistema.
 
@@ -56,6 +58,12 @@ Se una riga finisce in **Non riuscito**, clicca **Dettagli** accanto per leggere
 ## Rimandare senza escludere
 
 Il menu **Rimanda…** di ogni app permette di aspettare 24 ore, una settimana oppure saltare soltanto la versione proposta. L’app passa in **Rimandate** e non entra nelle selezioni o negli aggiornamenti notturni. **Riprendi** annulla il rinvio; con Salta questa versione torna disponibile quando compare una versione diversa. I rinvii sono conservati anche chiudendo il programma.
+
+## Novità e ritorno alla versione precedente
+
+Accanto alla versione nuova trovi **Novità** (le note dello sviluppatore, per le app che le pubblicano nel loro canale di aggiornamento), **Sito** (la pagina del programma) o **App Store**. Leggile prima di aggiornare, soprattutto per le versioni maggiori.
+
+Prima di sostituire un'app, Aggiornamenti ne conserva una copia per 7 giorni (fino a 2 GB per app). Se la versione nuova ti dà problemi, apri la voce nello **Storico** e premi **Ripristina**: l'app viene chiusa se è aperta e la versione precedente torna al suo posto. Per le app gestite da Homebrew il ripristino vale fino al prossimo aggiornamento: se vuoi restare alla versione vecchia, escludi l'app. Le copie scadute si cancellano con la pulizia; l'opzione si spegne in *Controllo automatico*. Gli strumenti da riga di comando e le app dell'App Store non si possono ripristinare.
 
 ## Storico e diagnostica
 

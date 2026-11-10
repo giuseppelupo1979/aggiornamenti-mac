@@ -77,7 +77,7 @@ Demo mode shows sample apps and simulates updates on a separate port. It changes
 | `aggiornamenti` | starts the local server if needed and opens http://127.0.0.1:8765 |
 | `aggiornamenti start` / `stop` | starts or stops the server without opening the page |
 | `aggiornamenti demo` | demo mode with sample data |
-| `aggiornamenti app` | creates the Aggiornamenti app on the Desktop |
+| `aggiornamenti app` | creates the Aggiornamenti app on the Desktop, with the menu bar icon |
 | `aggiornamenti version` | prints the version |
 
 In the page:
@@ -115,7 +115,9 @@ This tool replaces apps and can run installers as administrator, so here is exac
 - **The server listens only on `127.0.0.1`** and rejects requests that come from other websites.
 - **The administrator password is optional and lives only in your macOS Keychain** (item `aggiornamenti-mac`). It is checked before being saved, it is never written to disk or shown in the process list, and `askpass.sh` hands it to `sudo` only when an update needs it. You can remove it from the page at any time.
 - **Apps you installed by hand become managed by Homebrew** after their first update through this tool (`brew install --cask --force` replaces the existing copy). From then on Homebrew keeps them up to date. If you would rather not, exclude those apps.
-- **Sparkle downloads are verified.** An app or `.pkg` is installed only if its code signature is valid and comes from the same developer (Team ID) as the version already installed.
+- **Sparkle downloads are verified.** An app or `.pkg` is installed only if its code signature is valid and comes from the same developer (Team ID) as the version already installed, and, when the app declares a signing key (`SUPublicEDKey`), only if the download carries a valid EdDSA signature for that key.
+- **Commands need an access code.** The server only accepts commands carrying a random code stored in your user folder; the Desktop app, the menu bar icon, notifications and the `aggiornamenti` command pass it to the page. Websites and programs that only know the port cannot trigger installs. A program already running as your user could read the code, just as it could read the Keychain item with `security`.
+- **Previous versions are kept for 7 days** (up to 2 GB per app) so you can restore them from History.
 - **Nightly updates are conservative.** Only apps that are not excluded are updated, major versions and unverified matches are skipped, and open apps are never quit.
 - **No app is force-quit without your consent.** If an app does not quit by itself (for example because it asks to save a document), its row offers *Force quit* or *Postpone* and you decide.
 - **No false "up to date".** If Homebrew does not respond, the page says so and keeps showing the last valid list.

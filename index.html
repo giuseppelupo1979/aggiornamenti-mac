@@ -289,6 +289,8 @@
         <p class="hint" data-t="conditionsHint"></p>
         <p class="hint" id="nextauto" role="status"></p>
         <label class="opt"><input type="checkbox" id="s_login"> <span data-t="login"></span></label>
+        <label class="opt"><input type="checkbox" id="s_menubar"> <span data-t="menubar"></span></label>
+        <label class="opt"><input type="checkbox" id="s_keep"> <span data-t="keepPrevious"></span></label>
         <p class="hint" id="loginhint"></p>
         <p class="hint" id="lastauto"></p>
         <div class="settings-actions"><button type="button" id="s_test" data-t="testNotif"></button> <button type="button" id="s_clean" data-t="cleanNow"></button></div>
@@ -443,7 +445,11 @@ Object.assign(I18N.it, {
   restart:"Riavvio necessario", unverifiedResult:"Da verificare", deferred:"In attesa delle condizioni",
   allApps:"Tutte le app", allResults:"Tutti gli esiti", exportReport:"Esporta diagnostica", reportHint:"Il rapporto include le app nello storico. Percorsi utente, email, URL e credenziali riconoscibili vengono oscurati: controllalo prima di condividerlo.",
   noHistory:"Nessun aggiornamento corrisponde ai filtri.", detected:"Versione rilevata", target:"Versione richiesta", exitCode:"Codice di uscita", schedule:"Modalità", pendingReview:"Alcuni aggiornamenti richiedono una verifica o un riavvio. Consulta i dettagli e ripeti Controlla.",
-  noEligible:"Nessun aggiornamento da selezionare. Controlla anche le app rimandate ed escluse."
+  noEligible:"Nessun aggiornamento da selezionare. Controlla anche le app rimandate ed escluse.",
+  authTitle:"Apri Aggiornamenti dall'app", authText:"Per sicurezza questa pagina accetta comandi solo se aperta dall'app Aggiornamenti, dall'icona nella barra dei menu, da una notifica o dal comando aggiornamenti nel Terminale.",
+  notes:"Novità", site:"Sito", store:"App Store", rollback:v => `Ripristina ${v}`, rollbackConfirm:(n, v) => `Tornare a ${n} ${v}? L'app verrà chiusa se è aperta. Se è gestita da Homebrew, tornerà alla versione nuova con il prossimo aggiornamento: escludila se vuoi restare alla ${v}.`,
+  restoring:"Ripristino della versione precedente…", restoreFailed:"Ripristino non riuscito: ", restoredRes:"ripristinata",
+  keepPrevious:"Conserva per 7 giorni la versione precedente delle app aggiornate (Ripristina nello Storico)", menubar:"Mostra l'icona nella barra dei menu"
 });
 Object.assign(I18N.en, {
   onlyAC:"Automatically update only on AC power", avoidMetered:"Avoid automatic updates on hotspots and Low Data Mode networks",
@@ -454,10 +460,14 @@ Object.assign(I18N.en, {
   restart:"Restart required",unverifiedResult:"Needs verification",deferred:"Waiting for conditions",
   allApps:"All apps",allResults:"All results",exportReport:"Export diagnostics",reportHint:"The report includes apps in your history. Recognizable user paths, emails, URLs and credentials are redacted: review it before sharing.",
   noHistory:"No updates match these filters.",detected:"Detected version",target:"Requested version",exitCode:"Exit code",schedule:"Mode",pendingReview:"Some updates need verification or a restart. See the details and check again.",
-  noEligible:"No updates to select. Check postponed and excluded apps too."
+  noEligible:"No updates to select. Check postponed and excluded apps too.",
+  authTitle:"Open Aggiornamenti from the app", authText:"For safety this page only accepts commands when opened from the Aggiornamenti app, the menu bar icon, a notification or the aggiornamenti command in Terminal.",
+  notes:"What's new", site:"Website", store:"App Store", rollback:v => `Restore ${v}`, rollbackConfirm:(n, v) => `Go back to ${n} ${v}? The app will be quit if open. If Homebrew manages it, it will move to the new version again with the next update: exclude it to stay on ${v}.`,
+  restoring:"Restoring the previous version…", restoreFailed:"Restore failed: ", restoredRes:"restored",
+  keepPrevious:"Keep the previous version of updated apps for 7 days (Restore in History)", menubar:"Show the menu bar icon"
 });
 for (const l of Object.values(I18N)) {
-  Object.assign(l.res,{restart:l.restart,unverified:l.unverifiedResult,deferred:l.deferred});
+  Object.assign(l.res,{restart:l.restart,unverified:l.unverifiedResult,deferred:l.deferred,restored:l.restoredRes});
   l.phases.verify_install = l === I18N.it ? "Verifica versione installata" : "Checking installed version";
 }
 const forced = new URLSearchParams(location.search).get("lang");
@@ -477,10 +487,26 @@ function applyStatic() {
 }
 const locale = () => lang === "it" ? "it-IT" : "en-US";
 
+// codice di accesso: arriva nell'indirizzo (#t=...) da chi apre la pagina (app, comando, notifica),
+// resta in questo browser e si toglie subito dalla barra degli indirizzi e dalla cronologia
+let token = "";
+try { token = localStorage.getItem("agg-token") || ""; } catch {}
+{
+  const m = location.hash.match(/(?:^#|&)t=([\w-]+)/);
+  if (m) {
+    token = m[1];
+    try { localStorage.setItem("agg-token", token); } catch {}
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+}
+let needToken = false;
 async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  const headers = { "X-Agg-Token": token };
+  const r = await fetch(path, body === undefined ? { headers } : {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body)
   });
+  if (r.status === 401) { needToken = true; throw new Error("token"); }
+  needToken = false;
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -570,6 +596,15 @@ function iconHtml(path, kind) {
     : kind === "formula" ? '<div class="icon term">&gt;_</div>' : '<div class="icon blank"></div>';
 }
 
+const openNotes = new Set();
+function notesHtml(i) {
+  const n = i.notes;
+  if (!n) return "";
+  if (n.text) return ` <a class="details" data-notes="${esc(i.id)}" href="#">${L.notes}</a>`;
+  if (n.url && /^https:\/\//.test(n.url)) return ` <a class="details" href="${esc(n.url)}" target="_blank" rel="noopener">${L[n.kind] || L.notes}</a>`;
+  return "";
+}
+
 function rowHtml(i, busy, ex) {
   const job = data.jobs[i.id];
   const st = i.updated ? "done" : job?.status;
@@ -596,7 +631,8 @@ function rowHtml(i, busy, ex) {
       ${iconHtml(i.path, i.kind, i.name)}
       <div style="min-width:0">
         <div class="name">${esc(i.name)}${i.major ? `<span class="tag">${L.major}</span>` : ""}${i.verified === false ? `<span class="tag">${L.unverified}</span>` : ""}</div>
-        <div class="meta">${esc(i.installed)}<span class="arrow">→</span><span class="new-version">${esc(i.latest)}</span><span class="source">${esc(L.sources[i.source] || i.source)}</span></div>
+        <div class="meta">${esc(i.installed)}<span class="arrow">→</span><span class="new-version">${esc(i.latest)}</span><span class="source">${esc(L.sources[i.source] || i.source)}</span>${notesHtml(i)}</div>
+        ${openNotes.has(i.id) && i.notes?.text ? `<pre class="log notes">${esc(i.notes.text)}</pre>` : ""}
       </div>
       <div class="status ${st || ""}">${status}<div class="row-actions">${postpone}${act}</div></div>
       ${st === "running" || st === "queued" ? jobProgress(i.id, job) : ""}
@@ -615,6 +651,8 @@ function renderSettings() {
   set("#s_auto_time", "value", st.auto_time);
   set("#s_login", "checked", st.login);
   set("#s_ac", "checked", st.only_ac);
+  set("#s_keep", "checked", st.keep_previous !== false);
+  set("#s_menubar", "checked", st.menubar !== false);
   set("#s_metered", "checked", st.avoid_metered);
   set("#s_theme", "value", st.theme || "system");
   document.documentElement.dataset.theme = st.theme || "system";
@@ -640,6 +678,8 @@ async function saveSettings(patch) {
   render();
 }
 $("#s_ac").onchange = e => saveSettings({ only_ac: e.target.checked });
+$("#s_keep").onchange = e => saveSettings({ keep_previous: e.target.checked });
+$("#s_menubar").onchange = e => saveSettings({ menubar: e.target.checked });
 $("#s_metered").onchange = e => saveSettings({ avoid_metered: e.target.checked });
 $("#s_theme").onchange = e => saveSettings({ theme: e.target.value });
 $("#s_daily").onchange = e => saveSettings({ daily_check: e.target.checked });
@@ -690,6 +730,8 @@ function render() {
     : data.cleaning ? `<span class="spin"></span>${L.cleaning}`
     : data.self && data.self.status === "updating" ? `<span class="spin"></span>${L.selfUpdating(esc(data.self.available || ""))}`
     : data.self && data.self.status === "restarting" ? `<span class="spin"></span>${L.selfRestarting}`
+    : data.restore && data.restore.status === "running" ? `<span class="spin"></span>${L.restoring}`
+    : data.restore && data.restore.status === "error" && !data.running ? `<span style="color:var(--err)">${esc(L.restoreFailed + (data.restore.log || "").split("\n").pop())}</span>`
     : data.quit_after ? `<span class="spin"></span>${L.quitLater}`
     : data.stopping ? `<span class="spin"></span>${L.stopping}`
     : data.running ? L.updating
@@ -712,9 +754,9 @@ function render() {
   $("#pwdot").className = "dot" + (data.password ? " on" : "");
   $("#pwlabel").textContent = data.password ? L.pwSet : L.pwUnset;
 
-  const sig = JSON.stringify([lang, data.stale, (data.scan_warnings || []).join(), JSON.stringify(data.history || []), historyApp, historyResult, data.self && [data.self.available, data.self.status, selfLogOpen], busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
+  const sig = JSON.stringify([lang, Object.keys(data.backups || {}).join(), data.restore && data.restore.status, data.stale, (data.scan_warnings || []).join(), JSON.stringify(data.history || []), historyApp, historyResult, data.self && [data.self.available, data.self.status, selfLogOpen], busy, data.scanning, [...selected], [...openLogs], Object.keys(excluded()), (data.unchecked || []).length, (data.macos || []).join(), items.map(i => {
     const j = data.jobs[i.id];
-    return [i.id, i.updated, i.snooze, j?.status, openLogs.has(i.id) ? j?.log : ""];
+    return [i.id, i.updated, i.snooze, j?.status, openLogs.has(i.id) ? j?.log : "", openNotes.has(i.id)];
   })]);
   if (sig === lastSig) return patchProgress();
   lastSig = sig;
@@ -786,7 +828,7 @@ function render() {
   const filtered = hist.filter(h => (!historyApp || h.name === historyApp) && (!historyResult || h.result === historyResult));
   if (!filtered.length) html += `<li>${L.noHistory}</li>`;
   for (const h of filtered) html += `<li><details data-history="${esc(h.at + ':' + h.name)}" ${historyDetails.has(h.at + ':' + h.name) ? "open" : ""}><summary><span>${esc(h.name)}</span><span class="history-result ${esc(h.result)}">${esc(L.res[h.result] || h.result)} · ${ago(h.at)}</span></summary>
-    <p>${esc(h.from || "?")} → ${esc(h.to || "?")} · ${L.detected}: ${esc(h.observed || "?")}<br>${L.exitCode}: ${esc(h.exit_code ?? "—")} · ${L.schedule}: ${esc(h.mode || "—")}</p>${h.log ? `<pre class="log">${esc(h.log)}</pre>` : ""}</details></li>`;
+    <p>${esc(h.from || "?")} → ${esc(h.to || "?")} · ${L.detected}: ${esc(h.observed || "?")}<br>${L.exitCode}: ${esc(h.exit_code ?? "—")} · ${L.schedule}: ${esc(h.mode || "—")}</p>${h.backup && (data.backups || {})[h.backup] && !busy ? `<p><button type="button" class="mini" data-rollback="${esc(h.backup)}" data-name="${esc(h.name)}" data-from="${esc(h.from || "")}">${esc(L.rollback(h.from || ""))}</button></p>` : ""}${h.log ? `<pre class="log">${esc(h.log)}</pre>` : ""}</details></li>`;
   html += "</ul></details>";
   const focus = document.activeElement;
   const focusId = focus?.id;
@@ -823,6 +865,13 @@ $("#list").addEventListener("click", async e => {
     } catch (err) { alert(L.actionFailed + err.message); }
     return;
   }
+  const rb = e.target.closest("[data-rollback]");
+  if (rb) {
+    if (!confirm(L.rollbackConfirm(rb.dataset.name, rb.dataset.from))) return;
+    return act("/api/rollback", { id: rb.dataset.rollback });
+  }
+  const nt = e.target.closest("[data-notes]");
+  if (nt) { e.preventDefault(); openNotes.has(nt.dataset.notes) ? openNotes.delete(nt.dataset.notes) : openNotes.add(nt.dataset.notes); return render(); }
   if (e.target.closest("select, .hist")) return;
   const resume = e.target.closest("[data-resume]");
   if (resume) return act("/api/snooze", {id:resume.dataset.resume, choice:"resume"});
@@ -920,16 +969,19 @@ async function poll() {
   } catch {
     // il programma non risponde più (chiuso con Esci o fermato): mai una pagina che sembra
     // funzionare con dati vecchi
-    offline++;
-    if (offline >= 2 && !(data.self && data.self.status === "restarting")) showGone();
+    if (needToken) showGone(true);
+    else {
+      offline++;
+      if (offline >= 2 && !(data.self && data.self.status === "restarting")) showGone();
+    }
   }
   const selfBusy = data.self && (data.self.status === "updating" || data.self.status === "restarting");
   setTimeout(poll, data.running || selfBusy ? 500 : data.scanning ? 1000 : 3000);
 }
-function showGone() {
+function showGone(auth) {
   if ($("#gone").innerHTML) return;
   $("#gone").innerHTML = `<div class="gone" role="alertdialog" aria-labelledby="goneT"><div class="card">
-    <h2 id="goneT">${L.goneTitle}</h2><p>${L.goneText}</p></div></div>`;
+    <h2 id="goneT">${auth ? L.authTitle : L.goneTitle}</h2><p>${auth ? L.authText : L.goneText}</p></div></div>`;
 }
 poll();
 </script>
