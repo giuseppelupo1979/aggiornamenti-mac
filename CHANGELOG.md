@@ -2,6 +2,15 @@
 
 Tutte le modifiche rilevanti al progetto. Le versioni seguono il [versionamento semantico](https://semver.org/lang/it/).
 
+## [1.12.0] - 2026-11-27
+
+### Aggiunto
+- **Cancella versioni precedenti.** In *Controllo automatico* un nuovo pulsante mostra quanto spazio occupano le copie delle versioni precedenti conservate per il Ripristina (fino a 2 GB per app, per 7 giorni) e, dopo una conferma, le cancella tutte subito, anche quelle non ancora scadute. Lo spazio liberato è misurato sul disco prima e dopo, non stimato; le cartelle in sola lettura che certe copie fatte con `ditto` contengono vengono sbloccate prima di cancellarle. Da quel momento i pulsanti Ripristina nello Storico spariscono. Il pulsante non parte mentre un aggiornamento, un controllo, una pulizia o un ripristino sono in corso.
+
+### Verifica
+- 74 test automatici (copie valide e orfane cancellate, cartelle in sola lettura, rifiuto mentre il programma è occupato, codice di accesso obbligatorio) e prova nella demo: conferma, 360 MB liberati, pulsanti Ripristina spariti.
+- Non provato sul Mac reale con copie vere: nessun aggiornamento di terze parti installato durante le prove.
+
 ## [1.11.0] - 2026-11-10
 
 ### Sicurezza

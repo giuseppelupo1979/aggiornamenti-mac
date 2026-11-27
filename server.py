@@ -35,7 +35,7 @@ from network_status import current_cost
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1.11.0"   # tenere allineata con CHANGELOG.md
+VERSION = "1.12.0"   # tenere allineata con CHANGELOG.md
 # --demo: dati finti, cartelle temporanee, nessuna modifica al sistema (per prove e screenshot)
 DEMO = "--demo" in sys.argv
 HOST = "127.0.0.1"
@@ -276,6 +276,7 @@ DEFAULT_SETTINGS = {
     "last_auto_day": None,
     "last_auto": None,       # {at, updated, failed, postponed}
     "last_cleanup": None,    # {at, freed}
+    "last_backups_clear": None,   # {at, freed}: ultima cancellazione delle versioni precedenti
     "only_ac": True, "avoid_metered": True, "theme": "system", "snoozed": {},
     "keep_previous": True,   # conserva per 7 giorni la versione precedente delle app (Ripristina)
     "menubar": True,         # icona nella barra dei menu, se l'app Aggiornamenti è sulla Scrivania
@@ -1319,7 +1320,7 @@ def demo_update(item, mode="manual"):
         os.makedirs(os.path.join(BACKUP_DIR, backup), exist_ok=True)
         with open(os.path.join(BACKUP_DIR, backup, "info.json"), "w", encoding="utf-8") as f:
             json.dump({"name": item["name"], "version": item["installed"], "path": item.get("path") or "",
-                       "at": time.time(), "size": 0, "demo": True}, f)
+                       "at": time.time(), "size": 180 * 1024 ** 2, "demo": True}, f)
     add_history({"name": item["name"], "from": item["installed"], "to": item["latest"], "result": "done", "mode": mode,
                  "observed": item["latest"], "exit_code": 0, "log": "Demo: installed version verified.", "backup": backup})
 
@@ -1643,6 +1644,28 @@ def prune_backups():
             freed += info.get("size") or 0
             shutil.rmtree(d, ignore_errors=True)
     return freed
+
+
+def clear_backups():
+    """Cancella subito tutte le versioni precedenti conservate, anche quelle non scadute: i pulsanti
+    Ripristina spariscono. Restituisce i byte davvero liberati (misurati sul disco prima e dopo)."""
+    if not os.path.isdir(BACKUP_DIR):
+        return 0
+    if DEMO:   # le copie della demo sono solo descrizioni: si conta la dimensione dichiarata
+        freed = sum(i.get("size") or 0 for i in list_backups().values())
+        shutil.rmtree(BACKUP_DIR, ignore_errors=True)
+        return freed
+    before = dir_size(BACKUP_DIR) or 0
+    for d in glob.glob(os.path.join(BACKUP_DIR, "*")):
+        shutil.rmtree(d, ignore_errors=True)
+        if os.path.exists(d):
+            # le copie fatte con ditto possono avere cartelle in sola lettura che rmtree salta in silenzio
+            run(["chmod", "-R", "u+w", d], timeout=300)
+            run(["rm", "-rf", d], timeout=600)
+        if os.path.exists(d):
+            log_line("cancellazione versioni precedenti", os.path.basename(d), "non cancellata del tutto")
+    after = dir_size(BACKUP_DIR) or 0
+    return max(0, before - after)
 
 
 def restore_backup(bid):
@@ -2177,6 +2200,24 @@ class Handler(BaseHTTPRequestHandler):
                     with lock:
                         state["running"] = False
             threading.Thread(target=job, daemon=True).start()
+            return self.send(200, self.snapshot())
+        if u.path == "/api/backups/clear":
+            with lock:
+                if state["running"] or state["scanning"] or state["cleaning"] or \
+                        (state["restore"] and state["restore"]["status"] == "running"):
+                    return self.send(409, {"error": t("busy")})
+                state["running"] = state["cleaning"] = True
+            def clear_job():
+                freed = 0
+                try:
+                    freed = clear_backups()
+                except Exception as e:
+                    log_line("cancellazione versioni precedenti", e)
+                finally:
+                    update_settings(lambda st: st.update(last_backups_clear={"at": time.time(), "freed": freed}))
+                    with lock:
+                        state["running"] = state["cleaning"] = False
+            threading.Thread(target=clear_job, daemon=True).start()
             return self.send(200, self.snapshot())
         if u.path == "/api/notify-test":
             notify("Aggiornamenti", t("test"))

@@ -478,6 +478,33 @@ class Security(NewApi):
         handler.do_POST()
         self.assertEqual(replies[-1][0], 401)
 
+    def test_clear_backups_refused_while_busy_or_restoring(self):
+        s.state["running"] = True
+        self.assertEqual(self.post("/api/backups/clear", {})[0], 409)
+        s.state["running"] = False
+        s.state["restore"] = {"id": "x", "status": "running", "log": ""}
+        self.assertEqual(self.post("/api/backups/clear", {})[0], 409)
+
+    def test_clear_backups_needs_token(self):
+        handler = object.__new__(s.Handler)
+        handler.headers = {"Host": f"{s.HOST}:{s.PORT}", "Content-Length": "2"}
+        handler.path, handler.rfile = "/api/backups/clear", io.BytesIO(b"{}")
+        replies = []
+        handler.send = lambda code, payload: replies.append((code, payload))
+        handler.do_POST()
+        self.assertEqual(replies[-1][0], 401)
+
+    def test_clear_backups_job_frees_program(self):
+        with patch.object(s, "clear_backups", return_value=42):
+            self.assertEqual(self.post("/api/backups/clear", {})[0], 200)
+            for _ in range(100):
+                if not s.state["running"]:
+                    break
+                s.time.sleep(0.02)
+        self.assertFalse(s.state["running"])
+        self.assertFalse(s.state["cleaning"])
+        self.assertEqual(s.load_settings()["last_backups_clear"]["freed"], 42)
+
     def test_token_file_is_private_and_stable(self):
         self.assertEqual(os.stat(s.TOKEN_FILE).st_mode & 0o777, 0o600)
         self.assertEqual(s.load_token(), s.TOKEN)
@@ -540,6 +567,22 @@ class Backups(Base):
         (d / "info.json").write_text(json.dumps({"at": 0, "size": 10}))
         self.assertGreaterEqual(s.prune_backups(), 10)
         self.assertFalse(d.exists())
+
+    def test_clear_backups_deletes_valid_and_orphan_copies(self):
+        valid = Path(s.BACKUP_DIR) / "valida"
+        (valid / "Prova.app" / "Contents").mkdir(parents=True, exist_ok=True)
+        (valid / "Prova.app" / "Contents" / "dati").write_bytes(b"x" * 200_000)
+        (valid / "info.json").write_text(json.dumps({"name": "Prova", "at": s.time.time(), "size": 1}))
+        locked = valid / "Prova.app" / "Contents"
+        locked.chmod(0o555)                                       # come certe copie fatte con ditto
+        orphan = Path(s.BACKUP_DIR) / "orfana"
+        orphan.mkdir(parents=True, exist_ok=True)
+        self.assertIn("valida", s.list_backups())
+        freed = s.clear_backups()
+        self.assertGreaterEqual(freed, 200_000)                   # misurato sul disco, non dal file info
+        self.assertEqual(s.list_backups(), {})
+        self.assertFalse(valid.exists())
+        self.assertFalse(orphan.exists())
 
     def test_failed_update_drops_backup(self):
         with patch.object(s, "running_app", return_value=False), patch.object(s, "backup_app", return_value="b1"), \

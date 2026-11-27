@@ -91,7 +91,7 @@ Il manuale d'uso completo è in [MANUALE.md](MANUALE.md), le novità di ogni ver
 - **I download Sparkle sono verificati:** app e `.pkg` si installano solo se la firma è valida e appartiene allo stesso sviluppatore (Team ID) della versione installata.
 - **Firma degli sviluppatori:** se l'app dichiara una chiave di firma (`SUPublicEDKey`), l'aggiornamento Sparkle si installa solo con una firma EdDSA valida per quella chiave.
 - **Comandi solo con codice di accesso:** il server accetta comandi solo con un codice casuale salvato nella tua cartella utente, che app, icona nella barra dei menu, notifiche e comando `aggiornamenti` passano alla pagina. Siti web e programmi che conoscono solo la porta non possono avviare installazioni; un programma che gira già con il tuo utente potrebbe leggerlo, come potrebbe leggere la voce del Portachiavi.
-- **Versioni precedenti per 7 giorni** (fino a 2 GB per app), da ripristinare dallo Storico.
+- **Versioni precedenti per 7 giorni** (fino a 2 GB per app), da ripristinare dallo Storico. Per riavere subito lo spazio, **Cancella versioni precedenti** in *Controllo automatico* mostra quanto occupano e le cancella tutte insieme (dopo averti chiesto conferma: i pulsanti Ripristina spariscono).
 - **L'aggiornamento notturno è prudente:** salta app escluse, versioni maggiori e abbinamenti da verificare, e non chiude mai le app aperte.
 - **Nessuna app viene chiusa d'autorità senza il tuo consenso:** se un'app non si chiude da sola (per esempio perché chiede di salvare), la riga offre *Forza chiusura* o *Rimanda* e decidi tu.
 - **Nessun "tutto aggiornato" per errore:** se Homebrew non risponde la pagina lo dice e mostra l'ultimo elenco valido.
